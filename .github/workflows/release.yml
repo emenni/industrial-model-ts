@@ -19,6 +19,18 @@ jobs:
     name: Version or publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment:
+      name: prod
+    env:
+      CDF_CLIENT_NAME: ${{ secrets.CDF_CLIENT_NAME }}
+      CDF_CLUSTER: ${{ secrets.CDF_CLUSTER }}
+      CDF_DATA_MODEL_EXTERNAL_ID: ${{ secrets.CDF_DATA_MODEL_EXTERNAL_ID }}
+      CDF_DATA_MODEL_SPACE: ${{ secrets.CDF_DATA_MODEL_SPACE }}
+      CDF_DATA_MODEL_VERSION: ${{ secrets.CDF_DATA_MODEL_VERSION }}
+      CDF_CLIENT_ID: ${{ secrets.CDF_CLIENT_ID }}
+      CDF_CLIENT_SECRET: ${{ secrets.CDF_CLIENT_SECRET }}
+      CDF_TOKEN_URL: ${{ secrets.CDF_TOKEN_URL }}
+      CDF_PROJECT: ${{ secrets.CDF_PROJECT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,8 +56,11 @@ jobs:
       - name: Lint and typecheck
         run: npm run check
 
-      - name: Test
-        run: npm run test
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Integration tests
+        run: npm run test:integration
 
       - name: Build
         run: npm run build
