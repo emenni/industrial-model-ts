@@ -75,7 +75,7 @@
     "release:publish": "changeset publish"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
@@ -95,5 +95,9 @@
   },
   "dependencies": {
     "zod": "^4.4.3"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1",
+    "read-yaml-file": "^2.1.0"
   }
 }
