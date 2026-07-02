@@ -747,69 +747,9 @@ The returned array preserves the input order. Passing an empty array returns `[]
 
 ## Calculator
 
-Use the `Calculator` (from the `industrial-model/calculator` subpath) to compute derived time series from formulas that combine one or more source time series. Each query pairs a `formula` with the `parameters` its `{alias}` placeholders resolve to. The calculator fetches every parameter's datapoints in a single de-duplicated round trip, aligns them by position, and evaluates the formula element-by-element.
+Use the `Calculator` (from the `industrial-model/calculator` subpath) to compute derived time series — like KPIs and other formula-based metrics — from one or more source time series in Cognite. Each query pairs a `formula` (e.g. `"{power} / {flow} if {flow} != 0 else 0"`) with the parameters its `{alias}` placeholders resolve to; the calculator fetches every parameter's datapoints in a single de-duplicated round trip and evaluates the formula element-by-element. The underlying formula engine (`evaluate`) is also available on its own, for evaluating formulas over in-memory numeric series with no Cognite dependency.
 
-```ts
-import { CogniteClient } from "@cognite/sdk";
-import { Calculator } from "industrial-model/calculator";
-
-const calculator = new Calculator(client); // a CogniteClient
-
-const result = await calculator.calculate(
-  {
-    formula: "{power} / {flow} if {flow} != 0 else 0",
-    parameters: [
-      { timeSeries: { space: "ts-space", externalId: "power" }, alias: "power" },
-      { timeSeries: { space: "ts-space", externalId: "flow" }, alias: "flow" },
-    ],
-  },
-  new Date("2024-01-01T00:00:00.000Z"),
-  new Date("2024-01-02T00:00:00.000Z"),
-);
-
-result.datapoints; // [{ timestamp: Date, value: number }, …]
-```
-
-Timestamps come from the first parameter's series. Parameters that share a time series (and granularity, for aggregates) are folded into a single request, and aggregate requests accumulate every aggregate their parameters ask for.
-
-Request aggregates by setting `aggregateType` and `granularity` on a parameter:
-
-```ts
-const result = await calculator.calculate(
-  {
-    formula: "{maxTemp} - {avgTemp}",
-    parameters: [
-      { timeSeries: tempTs, aggregateType: "max", granularity: "1h", alias: "maxTemp" },
-      { timeSeries: tempTs, aggregateType: "average", granularity: "1h", alias: "avgTemp" },
-    ],
-  },
-  start,
-  end,
-);
-```
-
-Evaluate several queries in one round trip with `calculateMultiples([...], start, end)`, which returns one `CalculationResult` per query in order.
-
-### `evaluate`
-
-The formula engine is also available on its own for evaluating formulas over in-memory numeric series:
-
-```ts
-import { evaluate } from "industrial-model/calculator";
-
-evaluate("{A} + {B} * 2", { A: [1, 2, 3], B: [10, 20, 30] }); // [21, 42, 63]
-```
-
-Supported operators:
-
-- arithmetic: `+` `-` `*` `/` `**` `%` (binary) and `+` `-` (unary)
-- comparisons: `==` `!=` `<` `<=` `>` `>=` (chained comparisons are supported)
-- boolean: `and` `or`
-- conditional: `{A} / {B} if {B} != 0 else 0`
-
-Comparisons, boolean operators, and conditionals are evaluated element-by-element, and only the selected branch runs for a given element — so a value-dependent failure (like division by zero) in an unselected branch never throws. Modulo follows Python semantics (the result takes the sign of the divisor).
-
-Structural problems throw a subclass of `FormulaError` (`InvalidFormulaError`, `MissingParameterError`, `ParameterError`, `ParameterLengthError`). Value-dependent arithmetic failures throw a subclass of `ArithmeticError` instead: `ZeroDivisionError` for division/modulo by zero and `OverflowError` for overflowing exponentiation. When every referenced parameter is an empty series the result is an empty array; a mix of empty and non-empty parameters is a length mismatch.
+See the [Calculator documentation](./src/calculator/README.md) for a quick start, aggregated parameters, batching multiple queries, a full OEE example, supported operators, and error handling.
 
 ## Aggregation
 
