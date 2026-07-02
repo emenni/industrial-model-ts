@@ -745,6 +745,12 @@ urls[0]?.externalId;
 
 The returned array preserves the input order. Passing an empty array returns `[]` without calling Cognite.
 
+## Calculator
+
+Use the `Calculator` (from the `industrial-model/calculator` subpath) to compute derived time series — like KPIs and other formula-based metrics — from one or more source time series in Cognite. Each query pairs a `formula` (e.g. `"{power} / {flow} if {flow} != 0 else 0"`) with the parameters its `{alias}` placeholders resolve to; the calculator fetches every parameter's datapoints in a single de-duplicated round trip and evaluates the formula element-by-element. The underlying formula engine (`evaluate`) is also available on its own, for evaluating formulas over in-memory numeric series with no Cognite dependency.
+
+See the [Calculator documentation](./src/calculator/README.md) for a quick start, aggregated parameters, batching multiple queries, a full OEE example, supported operators, and error handling.
+
 ## Aggregation
 
 Use `aggregate()` when you need grouped counts, distinct values, or numeric summaries without loading every instance.
@@ -1332,6 +1338,17 @@ Logical combinators `AND`, `OR`, and `NOT` are supported at any nesting level, i
 | `CognitePointCloudModel`, `CognitePointCloudRevision`, `CognitePointCloudVolume` | Point cloud views. |
 | `Cognite360Image`, `Cognite360ImageModel`, `Cognite360ImageCollection`, `Cognite360ImageStation`, `Cognite360ImageAnnotation` | 360 image views. |
 | `CogniteCubeMap` | Cube map view. |
+
+**Calculator** (imported from `industrial-model/calculator`)
+
+| Symbol | Description |
+| --- | --- |
+| `Calculator` | Computes derived time series from formulas over Cognite datapoints. |
+| `CalculatorQuery`, `CalculatorParameter`, `CalculationResult`, `DataPoint` | Calculator input and output types. |
+| `evaluate`, `compileFormula`, `clearCache` | Formula engine for evaluating formulas over in-memory numeric series. |
+| `EvaluationResult`, `Parameters`, `ParameterValue`, `CompiledFormula` | Formula engine types. |
+| `FormulaError`, `InvalidFormulaError`, `MissingParameterError`, `ParameterError`, `ParameterLengthError` | Structural formula errors. |
+| `ArithmeticError`, `ZeroDivisionError`, `OverflowError` | Value-dependent arithmetic errors. |
 
 ## Code Generator
 

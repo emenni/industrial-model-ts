@@ -1,0 +1,36 @@
+import { compileFormula } from "./compiler";
+import { evaluateCompiled } from "./runtime";
+import type { EvaluationResult, Parameters } from "./types";
+
+/**
+ * Evaluate a formula over aligned numeric parameter sequences.
+ *
+ * Placeholders are written as ``{name}`` and each resolves to the matching
+ * entry in `parameters`. The following operators are supported:
+ *
+ * - arithmetic: ``+`` ``-`` ``*`` ``/`` ``**`` ``%`` (binary) and ``+`` ``-`` (unary)
+ * - comparisons: ``==`` ``!=`` ``<`` ``<=`` ``>`` ``>=``
+ * - boolean: ``and`` ``or``
+ * - conditional: ``{A} / {B} if {B} != 0 else 0``
+ *
+ * Structural problems (bad syntax, unknown identifiers, missing parameters,
+ * mismatched lengths, non-numeric values) throw a subclass of `FormulaError`.
+ *
+ * When every referenced parameter is an empty sequence the result is an empty
+ * array — there is nothing to compute over, so this is treated as a valid
+ * (empty) result rather than an error. A *mix* of empty and non-empty
+ * parameters is still a length mismatch and throws `ParameterLengthError`.
+ *
+ * Arithmetic failures that depend on the parameter *values* are surfaced as
+ * arithmetic errors (subclasses of `ArithmeticError`) rather than
+ * `FormulaError`: dividing or taking a modulo by zero throws
+ * `ZeroDivisionError` and an overflowing exponentiation throws `OverflowError`.
+ *
+ * Conditional expressions, comparisons and boolean operators are evaluated
+ * element-by-element: for each series element only the selected branch is
+ * evaluated, so a division-by-zero (or other value-dependent failure) in the
+ * branch that is *not* selected for a given element never throws.
+ */
+export function evaluate(formula: string, parameters: Parameters = {}): EvaluationResult {
+  return evaluateCompiled(compileFormula(formula), parameters);
+}

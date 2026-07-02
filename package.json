@@ -49,6 +49,16 @@
         "types": "./dist/cognite-core/index.d.cts",
         "default": "./dist/cognite-core/index.cjs"
       }
+    },
+    "./calculator": {
+      "import": {
+        "types": "./dist/calculator/index.d.ts",
+        "default": "./dist/calculator/index.js"
+      },
+      "require": {
+        "types": "./dist/calculator/index.d.cts",
+        "default": "./dist/calculator/index.cjs"
+      }
     }
   },
   "main": "./dist/index.cjs",
