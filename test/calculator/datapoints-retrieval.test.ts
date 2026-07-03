@@ -34,6 +34,24 @@ function rawParam(
   return { timeSeries, alias };
 }
 
+// A Cognite mock that echoes each request item back as a result item whose
+// single datapoint value is the numeric externalId. This lets tests assert
+// that pagination stitches responses back together in the right order.
+function makePaginatingRetriever(): {
+  retriever: DatapointsRetriever;
+  cognite: CognitePort;
+} {
+  const cognite = makeCogniteMock();
+  cognite.retrieveDatapoints = vi.fn().mockImplementation(({ items }) =>
+    Promise.resolve({
+      items: items.map((item: { externalId: string }) =>
+        makeResultItem({ datapoints: [{ timestamp: T0, value: Number(item.externalId) }] }),
+      ),
+    }),
+  );
+  return { retriever: new DatapointsRetriever(cognite), cognite };
+}
+
 describe("DatapointsRetriever.retrieveDatapoints", () => {
   it("returns an empty result per parameter without calling Cognite when there are no parameters", async () => {
     const { retriever, cognite } = makeRetriever([]);
@@ -215,5 +233,65 @@ describe("DatapointsRetriever.retrieveDatapoints", () => {
     const result = await retriever.retrieveDatapoints([rawParam(TS_A, "A")], START, END);
 
     expect(result[0]).toEqual([{ timestamp: T0, value: 1 }]);
+  });
+
+  it("paginates requests for more than 100 unique time series", async () => {
+    const { retriever, cognite } = makePaginatingRetriever();
+
+    const params = Array.from({ length: 150 }, (_, index) =>
+      rawParam({ space: "ts-space", externalId: String(index) }, `p${index}`),
+    );
+    const result = await retriever.retrieveDatapoints(params, START, END);
+
+    expect(cognite.retrieveDatapoints).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(cognite.retrieveDatapoints).mock.calls[0]?.[0]?.items).toHaveLength(100);
+    expect(vi.mocked(cognite.retrieveDatapoints).mock.calls[1]?.[0]?.items).toHaveLength(50);
+    expect(result[0]?.[0]?.value).toBe(0);
+    expect(result[99]?.[0]?.value).toBe(99);
+    expect(result[149]?.[0]?.value).toBe(149);
+  });
+
+  it("issues a single request for exactly 100 unique time series", async () => {
+    const { retriever, cognite } = makePaginatingRetriever();
+
+    const params = Array.from({ length: 100 }, (_, index) =>
+      rawParam({ space: "ts-space", externalId: String(index) }, `p${index}`),
+    );
+    const result = await retriever.retrieveDatapoints(params, START, END);
+
+    expect(cognite.retrieveDatapoints).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(cognite.retrieveDatapoints).mock.calls[0]?.[0]?.items).toHaveLength(100);
+    expect(result[0]?.[0]?.value).toBe(0);
+    expect(result[99]?.[0]?.value).toBe(99);
+  });
+
+  it("de-duplicates before paginating so shared series stay in one request", async () => {
+    const { retriever, cognite } = makePaginatingRetriever();
+
+    // 150 parameters, but all point at the same series: only one unique request.
+    const params = Array.from({ length: 150 }, (_, index) =>
+      rawParam({ space: "ts-space", externalId: "7" }, `p${index}`),
+    );
+    const result = await retriever.retrieveDatapoints(params, START, END);
+
+    expect(cognite.retrieveDatapoints).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(cognite.retrieveDatapoints).mock.calls[0]?.[0]?.items).toHaveLength(1);
+    // Every parameter resolves to the same de-duplicated series.
+    expect(result).toHaveLength(150);
+    expect(result.every((series) => series[0]?.value === 7)).toBe(true);
+  });
+
+  it("forwards the shared start and end window to every paginated request", async () => {
+    const { retriever, cognite } = makePaginatingRetriever();
+
+    const params = Array.from({ length: 150 }, (_, index) =>
+      rawParam({ space: "ts-space", externalId: String(index) }, `p${index}`),
+    );
+    await retriever.retrieveDatapoints(params, START, END);
+
+    for (const call of vi.mocked(cognite.retrieveDatapoints).mock.calls) {
+      expect(call[0]?.start).toBe(START);
+      expect(call[0]?.end).toBe(END);
+    }
   });
 });
