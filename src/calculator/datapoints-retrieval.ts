@@ -7,7 +7,11 @@ import type {
   CognitePort,
 } from "../cognite";
 import type { DatapointAggregate } from "../types";
+import { chunks } from "../utils/array";
 import type { CalculatorParameter, DataPoint } from "./models";
+
+// Cognite's datapoints retrieve endpoint accepts at most 100 items per request.
+const MAX_ITEMS_PER_REQUEST = 100;
 
 type BuiltRequests = {
   requests: CogniteDatapointRetrieveItem[];
@@ -35,12 +39,17 @@ export class DatapointsRetriever {
       return parameters.map(() => []);
     }
 
-    const options: CogniteDatapointRetrieveOptions = { items: requests, start, end };
-    const raw = await this.cognite.retrieveDatapoints(options);
+    const responses = await Promise.all(
+      chunks(requests, MAX_ITEMS_PER_REQUEST).map((items) => {
+        const options: CogniteDatapointRetrieveOptions = { items, start, end };
+        return this.cognite.retrieveDatapoints(options);
+      }),
+    );
+    const items = responses.flatMap((response) => response.items);
 
     return parameters.map((parameter, index) => {
       const requestIndex = indexMapping[index] as number;
-      const item = raw.items[requestIndex];
+      const item = items[requestIndex];
       if (item === undefined) {
         throw new Error(`missing datapoints response for parameter '${parameter.alias}'`);
       }
