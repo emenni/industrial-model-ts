@@ -59,12 +59,9 @@ class CogniteSdkAdapter implements CognitePort {
   }
 
   async searchInstances(request: InstancesSearchRequest): Promise<InstancesSearchResponse> {
-    const search = (
-      this.client.instances as unknown as {
-        search: (request: InstancesSearchRequest) => Promise<{ items: unknown[] }>;
-      }
-    ).search;
-    const response = await search(request);
+    const response = await this.client.instances.search(
+      request as Parameters<CogniteClient["instances"]["search"]>[0],
+    );
     return {
       items: response.items as unknown as InstancesSearchResponse["items"],
     };
@@ -82,15 +79,29 @@ class CogniteSdkAdapter implements CognitePort {
   }
 
   async applyInstances(request: InstancesApplyRequest): Promise<InstancesApplyResponse> {
-    const apply = (
-      this.client.instances as unknown as {
-        apply: (request: InstancesApplyRequest) => Promise<{ items: unknown[] }>;
-      }
-    ).apply;
-    const response = await apply(request);
-    return {
-      items: response.items as unknown as InstancesApplyResponse["items"],
-    };
+    // The Cognite SDK has no combined upsert+delete endpoint: `instances.upsert` writes
+    // items and `instances.delete` removes them, as two separate API calls.
+    const { items, delete: deleteItems = [], replace } = request;
+    const results: InstancesApplyResponse["items"] = [];
+
+    if (deleteItems.length > 0) {
+      const deleteResponse = await this.client.instances.delete(
+        deleteItems as Parameters<CogniteClient["instances"]["delete"]>[0],
+      );
+      results.push(
+        ...((deleteResponse as unknown as { items?: InstancesApplyResponse["items"] }).items ?? []),
+      );
+    }
+
+    if (items.length > 0) {
+      const response = await this.client.instances.upsert({
+        items,
+        ...(replace === true ? { replace: true } : {}),
+      } as Parameters<CogniteClient["instances"]["upsert"]>[0]);
+      results.push(...(response.items as unknown as InstancesApplyResponse["items"]));
+    }
+
+    return { items: results };
   }
 
   async retrieveDatapoints(
