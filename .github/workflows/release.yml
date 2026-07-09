@@ -44,8 +44,13 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
 
+      # Pinned instead of @latest: self-upgrading npm in place to >=11.13.0 has a known
+      # Arborist bug that leaves stale nested deps behind (e.g. minipass, sigstore),
+      # breaking provenance-signed publishes with "Cannot find module 'sigstore'".
+      # 11.12.1 is the last release before that range and still satisfies the >=11.5.1
+      # floor required for OIDC trusted publishing. Bump deliberately, not via @latest.
       - name: Update npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@11.12.1
 
       - name: Install dependencies
         run: npm ci
