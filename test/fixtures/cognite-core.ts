@@ -80,35 +80,39 @@ export function makeCogniteClientMock(options?: {
   fileUploadResponse?: unknown;
   fileDownloadUrlsResponse?: unknown[];
 }): CogniteClient {
-  return {
-    dataModels: {
-      retrieve: vi.fn().mockResolvedValue(cogniteCoreDataModelJson),
-    },
-    instances: {
-      query: vi.fn().mockResolvedValue({
-        items: options?.queryItems ?? {},
-        nextCursor: options?.nextCursor ?? {},
-      }),
-      search: vi.fn().mockResolvedValue(options?.searchResponse ?? { items: [] }),
-      aggregate: vi.fn().mockResolvedValue(options?.aggregateResponse ?? { items: [] }),
-      apply: vi.fn().mockResolvedValue(options?.applyResponse ?? { items: [] }),
-    },
-    datapoints: {
-      retrieve: vi.fn().mockResolvedValue(options?.datapointsRetrieveResponse ?? []),
-      retrieveLatest: vi.fn().mockResolvedValue(options?.datapointsLatestResponse ?? []),
-      insert: vi.fn().mockResolvedValue(undefined),
-      delete: vi.fn().mockResolvedValue(undefined),
-    },
-    files: {
-      upload: vi.fn().mockResolvedValue(
-        options?.fileUploadResponse ?? {
-          name: "file.txt",
-          uploaded: false,
-          createdTime: new Date(0),
-          lastUpdatedTime: new Date(0),
-        },
-      ),
-      getDownloadUrls: vi.fn().mockResolvedValue(options?.fileDownloadUrlsResponse ?? []),
-    },
-  } as unknown as CogniteClient;
+  // Every mocked method name is checked against the real SDK's property names below
+  // (via `Partial<Record<keyof ..., unknown>>` annotations), so a method that doesn't
+  // exist on the real CogniteClient (e.g. a typo, or a method renamed/removed upstream)
+  // fails to compile instead of silently mocking a fictional API.
+  const dataModels: Partial<Record<keyof CogniteClient["dataModels"], unknown>> = {
+    retrieve: vi.fn().mockResolvedValue(cogniteCoreDataModelJson),
+  };
+  const instances: Partial<Record<keyof CogniteClient["instances"], unknown>> = {
+    query: vi.fn().mockResolvedValue({
+      items: options?.queryItems ?? {},
+      nextCursor: options?.nextCursor ?? {},
+    }),
+    search: vi.fn().mockResolvedValue(options?.searchResponse ?? { items: [] }),
+    aggregate: vi.fn().mockResolvedValue(options?.aggregateResponse ?? { items: [] }),
+    upsert: vi.fn().mockResolvedValue(options?.applyResponse ?? { items: [] }),
+    delete: vi.fn().mockResolvedValue(options?.applyResponse ?? { items: [] }),
+  };
+  const datapoints: Partial<Record<keyof CogniteClient["datapoints"], unknown>> = {
+    retrieve: vi.fn().mockResolvedValue(options?.datapointsRetrieveResponse ?? []),
+    retrieveLatest: vi.fn().mockResolvedValue(options?.datapointsLatestResponse ?? []),
+    insert: vi.fn().mockResolvedValue(undefined),
+    delete: vi.fn().mockResolvedValue(undefined),
+  };
+  const files: Partial<Record<keyof CogniteClient["files"], unknown>> = {
+    upload: vi.fn().mockResolvedValue(
+      options?.fileUploadResponse ?? {
+        name: "file.txt",
+        uploaded: false,
+        createdTime: new Date(0),
+        lastUpdatedTime: new Date(0),
+      },
+    ),
+    getDownloadUrls: vi.fn().mockResolvedValue(options?.fileDownloadUrlsResponse ?? []),
+  };
+  return { dataModels, instances, datapoints, files } as unknown as CogniteClient;
 }

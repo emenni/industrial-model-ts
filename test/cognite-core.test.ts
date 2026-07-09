@@ -1,4 +1,4 @@
-import { describe, expect, it, type vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { NodeDefinition } from "../src/cognite";
 import { COGNITE_CORE_DATA_MODEL, CogniteCoreClient } from "../src/cognite-core/index.js";
 import {
@@ -119,11 +119,9 @@ describe("Cognite Core module", () => {
 
     const result = await core.delete([{ space: "asset-space", externalId: "pump-1" }]);
 
-    const apply = (client.instances as unknown as { apply: ReturnType<typeof vi.fn> }).apply;
-    expect(apply).toHaveBeenCalledWith({
-      items: [],
-      delete: [{ instanceType: "node", space: "asset-space", externalId: "pump-1" }],
-    });
+    expect(client.instances.delete).toHaveBeenCalledWith([
+      { instanceType: "node", space: "asset-space", externalId: "pump-1" },
+    ]);
     expect(result.items).toEqual([
       { instanceType: "node", space: "asset-space", externalId: "pump-1" },
     ]);
@@ -325,8 +323,7 @@ describe("Cognite Core module", () => {
       ],
     });
 
-    const apply = (client.instances as unknown as { apply: ReturnType<typeof vi.fn> }).apply;
-    expect(apply).toHaveBeenCalledWith(
+    expect(client.instances.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         items: [
           expect.objectContaining({

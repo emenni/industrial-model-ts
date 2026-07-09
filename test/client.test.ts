@@ -262,8 +262,7 @@ describe("IndustrialModelClient", () => {
       ],
     });
 
-    const apply = (client.instances as unknown as { apply: ReturnType<typeof vi.fn> }).apply;
-    expect(apply).toHaveBeenCalledWith({
+    expect(client.instances.upsert).toHaveBeenCalledWith({
       items: [
         {
           instanceType: "node",
@@ -314,10 +313,10 @@ describe("IndustrialModelClient", () => {
       items,
     });
 
-    const apply = (client.instances as unknown as { apply: ReturnType<typeof vi.fn> }).apply;
-    expect(apply).toHaveBeenCalledTimes(2);
-    expect(apply.mock.calls[0]?.[0].items).toHaveLength(1000);
-    expect(apply.mock.calls[1]?.[0].items).toHaveLength(1);
+    const upsert = vi.mocked(client.instances.upsert);
+    expect(upsert).toHaveBeenCalledTimes(2);
+    expect(upsert.mock.calls[0]?.[0].items).toHaveLength(1000);
+    expect(upsert.mock.calls[1]?.[0].items).toHaveLength(1);
   });
 
   it("splits edge writes above Cognite's single-request item limit", async () => {
@@ -348,10 +347,10 @@ describe("IndustrialModelClient", () => {
       },
     });
 
-    const apply = (client.instances as unknown as { apply: ReturnType<typeof vi.fn> }).apply;
-    expect(apply).toHaveBeenCalledTimes(2);
-    expect(apply.mock.calls[0]?.[0].items).toHaveLength(1000);
-    expect(apply.mock.calls[1]?.[0].items).toHaveLength(2);
+    const upsert = vi.mocked(client.instances.upsert);
+    expect(upsert).toHaveBeenCalledTimes(2);
+    expect(upsert.mock.calls[0]?.[0].items).toHaveLength(1000);
+    expect(upsert.mock.calls[1]?.[0].items).toHaveLength(2);
   });
 
   it("splits large edge replacement upserts into multiple Cognite apply calls", async () => {
@@ -381,18 +380,92 @@ describe("IndustrialModelClient", () => {
       ],
     });
 
-    const apply = (client.instances as unknown as { apply: ReturnType<typeof vi.fn> }).apply;
-    expect(apply).toHaveBeenCalledTimes(2);
-    expect(apply.mock.calls[0]?.[0]).toMatchObject({
-      items: [],
-      delete: expect.arrayContaining([
+    // Cognite has no combined upsert+delete endpoint, so the replaced edges are deleted
+    // via `instances.delete` and the node is written via a separate `instances.upsert`.
+    const deleteMock = vi.mocked(client.instances.delete);
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+    expect(deleteMock.mock.calls[0]?.[0]).toEqual(
+      expect.arrayContaining([
         { instanceType: "edge", space: "object-space", externalId: "old-edge-0" },
       ]),
-    });
-    expect(apply.mock.calls[0]?.[0].delete).toHaveLength(1000);
-    expect(apply.mock.calls[1]?.[0]).toEqual({
+    );
+    expect(deleteMock.mock.calls[0]?.[0]).toHaveLength(1000);
+
+    const upsert = vi.mocked(client.instances.upsert);
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert.mock.calls[0]?.[0]).toEqual({
       items: [{ instanceType: "node", space: "object-space", externalId: "object-1" }],
     });
+  });
+
+  it("issues both a delete and an upsert call for a single, under-limit edge replacement", async () => {
+    const existingEdges = [
+      {
+        instanceType: "edge" as const,
+        space: "object-space",
+        externalId: "old-edge-0",
+        startNode: { space: "object-space", externalId: "object-1" },
+        endNode: { space: "image-space", externalId: "old-image-0" },
+      },
+    ];
+    const client = makeCogniteClientMock({
+      queryItems: { images360Edges: existingEdges },
+    });
+    vi.mocked(client.instances.delete).mockResolvedValue({
+      items: [{ instanceType: "edge", space: "object-space", externalId: "old-edge-0" }],
+    });
+    vi.mocked(client.instances.upsert).mockResolvedValue({
+      items: [
+        {
+          instanceType: "node",
+          space: "object-space",
+          externalId: "object-1",
+          version: 2,
+          wasModified: true,
+          createdTime: 0,
+          lastUpdatedTime: 0,
+        },
+      ],
+    });
+    const model = new IndustrialModelClient(client, COGNITE_CORE_DATA_MODEL);
+
+    type Object3D = IndustrialModel<{ name?: string }, { images360?: NodeId[] }>;
+    const result = await model.upsert<Object3D>()({
+      viewExternalId: "Cognite3DObject",
+      edgeMode: "replace",
+      items: [
+        {
+          space: "object-space",
+          externalId: "object-1",
+          images360: [],
+        },
+      ],
+    });
+
+    // A single applyInstancesInChunks call below the item limit passes a request with both
+    // `items` and `delete` populated straight through to the adapter, which must fan that
+    // out into one `instances.delete` call and one `instances.upsert` call and merge results
+    // (the Cognite SDK has no endpoint that accepts both in a single request).
+    expect(client.instances.delete).toHaveBeenCalledTimes(1);
+    expect(client.instances.delete).toHaveBeenCalledWith([
+      { instanceType: "edge", space: "object-space", externalId: "old-edge-0" },
+    ]);
+    expect(client.instances.upsert).toHaveBeenCalledTimes(1);
+    expect(client.instances.upsert).toHaveBeenCalledWith({
+      items: [{ instanceType: "node", space: "object-space", externalId: "object-1" }],
+    });
+    expect(result.items).toEqual([
+      { instanceType: "edge", space: "object-space", externalId: "old-edge-0" },
+      {
+        instanceType: "node",
+        space: "object-space",
+        externalId: "object-1",
+        version: 2,
+        wasModified: true,
+        createdTime: 0,
+        lastUpdatedTime: 0,
+      },
+    ]);
   });
 
   it("deletes nodes end-to-end with mocked CogniteClient", async () => {
@@ -415,11 +488,9 @@ describe("IndustrialModelClient", () => {
       { space: "asset-space", externalId: "pump-1", name: "Pump 1" },
     ]);
 
-    const apply = (client.instances as unknown as { apply: ReturnType<typeof vi.fn> }).apply;
-    expect(apply).toHaveBeenCalledWith({
-      items: [],
-      delete: [{ instanceType: "node", space: "asset-space", externalId: "pump-1" }],
-    });
+    expect(client.instances.delete).toHaveBeenCalledWith([
+      { instanceType: "node", space: "asset-space", externalId: "pump-1" },
+    ]);
     expect(result.items).toEqual([
       {
         instanceType: "node",
@@ -441,10 +512,10 @@ describe("IndustrialModelClient", () => {
 
     await model.delete(items);
 
-    const apply = (client.instances as unknown as { apply: ReturnType<typeof vi.fn> }).apply;
-    expect(apply).toHaveBeenCalledTimes(2);
-    expect(apply.mock.calls[0]?.[0].delete).toHaveLength(1000);
-    expect(apply.mock.calls[1]?.[0].delete).toHaveLength(1);
+    const deleteMock = vi.mocked(client.instances.delete);
+    expect(deleteMock).toHaveBeenCalledTimes(2);
+    expect(deleteMock.mock.calls[0]?.[0]).toHaveLength(1000);
+    expect(deleteMock.mock.calls[1]?.[0]).toHaveLength(1);
   });
 
   it("rejects malformed delete node identities before calling Cognite", async () => {
@@ -455,8 +526,8 @@ describe("IndustrialModelClient", () => {
       /Invalid delete options.*items\.0\.externalId/s,
     );
 
-    const apply = (client.instances as unknown as { apply: ReturnType<typeof vi.fn> }).apply;
-    expect(apply).not.toHaveBeenCalled();
+    expect(client.instances.delete).not.toHaveBeenCalled();
+    expect(client.instances.upsert).not.toHaveBeenCalled();
   });
 
   it("retrieves datapoints with a timeSeries-oriented public API", async () => {
