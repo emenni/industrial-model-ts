@@ -1,5 +1,11 @@
 # industrial-model
 
+## 0.13.0
+
+### Minor Changes
+
+- c64b487: Map Cognite `timestamp` and `date` view properties to TypeScript `Date` (generator + Cognite Core types), and always coerce those fields to `Date` on query results. Upsert and filters continue to serialize `Date` values to ISO strings for Cognite.
+
 ## 0.12.2
 
 ### Patch Changes
