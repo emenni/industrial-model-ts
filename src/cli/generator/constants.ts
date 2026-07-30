@@ -6,8 +6,8 @@
 export const typeMappings: Record<string, string> = {
   text: "string",
   boolean: "boolean",
-  timestamp: "string",
-  date: "string",
+  timestamp: "Date",
+  date: "Date",
   json: "unknown",
   float32: "number",
   float64: "number",

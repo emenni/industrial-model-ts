@@ -44,6 +44,35 @@ function getElementKeys(node: NodeDefinition, element: unknown): string[] {
   return [nodeInstanceId(node)];
 }
 
+function coerceToDate(value: unknown): unknown {
+  if (value instanceof Date) return value;
+  if (typeof value === "string" || typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date;
+  }
+  return value;
+}
+
+function coerceTemporalProperties(view: ViewDefinition, properties: Record<string, unknown>): void {
+  for (const [name, property] of Object.entries(view.properties)) {
+    if (!isViewPropertyDefinition(property)) continue;
+    const type = property.type.type;
+    if (type !== "timestamp" && type !== "date") continue;
+
+    const value = properties[name];
+    if (value === undefined || value === null) continue;
+
+    if (property.type.list === true) {
+      if (Array.isArray(value)) {
+        properties[name] = value.map(coerceToDate);
+      }
+      continue;
+    }
+
+    properties[name] = coerceToDate(value);
+  }
+}
+
 export class QueryResultMapper {
   constructor(private readonly viewMapper: ViewMapper) {}
 
@@ -88,6 +117,7 @@ export class QueryResultMapper {
       if (!spaceProps || !(viewKey in spaceProps)) continue;
 
       const properties: Record<string, unknown> = { ...(spaceProps[viewKey] ?? {}) };
+      coerceTemporalProperties(view, properties);
 
       const getResultId = (): string => {
         if (!resultPropertyKey) return id;

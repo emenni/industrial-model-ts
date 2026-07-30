@@ -879,7 +879,7 @@ const model = new IndustrialModelClient(
 );
 ```
 
-When result validation is enabled, Cognite `date` and `timestamp` view properties are converted to JavaScript `Date` objects. Without it, result values are returned as Cognite provides them, usually ISO strings for timestamps.
+Cognite `date` and `timestamp` view properties are always converted to JavaScript `Date` objects when mapping query results. Result validation optionally parses the full item shape through Zod schemas derived from Cognite view metadata.
 
 ## Cognite Core Client
 

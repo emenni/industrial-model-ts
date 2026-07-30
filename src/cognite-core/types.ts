@@ -59,8 +59,8 @@ export type CogniteSourceable = IndustrialModel<
     sourceId?: string;
     sourceContext?: string;
     source?: NodeId;
-    sourceCreatedTime?: string;
-    sourceUpdatedTime?: string;
+    sourceCreatedTime?: Date;
+    sourceUpdatedTime?: Date;
     sourceCreatedUser?: string;
     sourceUpdatedUser?: string;
   },
@@ -79,10 +79,10 @@ export type CogniteSourceSystem = IndustrialModel<{
 }>;
 
 export type CogniteSchedulable = IndustrialModel<{
-  startTime?: string;
-  endTime?: string;
-  scheduledStartTime?: string;
-  scheduledEndTime?: string;
+  startTime?: Date;
+  endTime?: Date;
+  scheduledStartTime?: Date;
+  scheduledEndTime?: Date;
 }>;
 
 export type CogniteVisualizable = IndustrialModel<
@@ -319,7 +319,7 @@ export type Cognite360Image = IndustrialModel<
     bottom?: NodeId;
     collection360?: NodeId;
     station360?: NodeId;
-    takenAt?: string;
+    takenAt?: Date;
   },
   {
     front?: CogniteFile;
@@ -350,8 +350,8 @@ export type Cognite360ImageAnnotation = IndustrialModel<
     sourceId?: string;
     sourceContext?: string;
     source?: NodeId;
-    sourceCreatedTime?: string;
-    sourceUpdatedTime?: string;
+    sourceCreatedTime?: Date;
+    sourceUpdatedTime?: Date;
     sourceCreatedUser?: string;
     sourceUpdatedUser?: string;
     confidence?: number;
@@ -374,14 +374,14 @@ export type CogniteAsset = IndustrialModel<
     sourceId?: string;
     sourceContext?: string;
     source?: NodeId;
-    sourceCreatedTime?: string;
-    sourceUpdatedTime?: string;
+    sourceCreatedTime?: Date;
+    sourceUpdatedTime?: Date;
     sourceCreatedUser?: string;
     sourceUpdatedUser?: string;
     parent?: NodeId;
     root?: NodeId;
     path?: NodeId[];
-    pathLastUpdatedTime?: string;
+    pathLastUpdatedTime?: Date;
     assetClass?: NodeId;
     type?: NodeId;
   },
@@ -431,8 +431,8 @@ export type CogniteEquipment = IndustrialModel<
     sourceId?: string;
     sourceContext?: string;
     source?: NodeId;
-    sourceCreatedTime?: string;
-    sourceUpdatedTime?: string;
+    sourceCreatedTime?: Date;
+    sourceUpdatedTime?: Date;
     sourceCreatedUser?: string;
     sourceUpdatedUser?: string;
     asset?: NodeId;
@@ -469,15 +469,15 @@ export type CogniteFile = IndustrialModel<
     sourceId?: string;
     sourceContext?: string;
     source?: NodeId;
-    sourceCreatedTime?: string;
-    sourceUpdatedTime?: string;
+    sourceCreatedTime?: Date;
+    sourceUpdatedTime?: Date;
     sourceCreatedUser?: string;
     sourceUpdatedUser?: string;
     assets?: NodeId[];
     mimeType?: string;
     directory?: string;
     isUploaded?: boolean;
-    uploadedTime?: string;
+    uploadedTime?: Date;
     category?: NodeId;
   },
   {
@@ -506,14 +506,14 @@ export type CogniteActivity = IndustrialModel<
     sourceId?: string;
     sourceContext?: string;
     source?: NodeId;
-    sourceCreatedTime?: string;
-    sourceUpdatedTime?: string;
+    sourceCreatedTime?: Date;
+    sourceUpdatedTime?: Date;
     sourceCreatedUser?: string;
     sourceUpdatedUser?: string;
-    startTime?: string;
-    endTime?: string;
-    scheduledStartTime?: string;
-    scheduledEndTime?: string;
+    startTime?: Date;
+    endTime?: Date;
+    scheduledStartTime?: Date;
+    scheduledEndTime?: Date;
     assets?: NodeId[];
     equipment?: NodeId[];
     timeSeries?: NodeId[];
@@ -535,8 +535,8 @@ export type CogniteTimeSeries = IndustrialModel<
     sourceId?: string;
     sourceContext?: string;
     source?: NodeId;
-    sourceCreatedTime?: string;
-    sourceUpdatedTime?: string;
+    sourceCreatedTime?: Date;
+    sourceUpdatedTime?: Date;
     sourceCreatedUser?: string;
     sourceUpdatedUser?: string;
     isStep: boolean;
@@ -564,8 +564,8 @@ export type CogniteAnnotation = IndustrialModel<
     sourceId?: string;
     sourceContext?: string;
     source?: NodeId;
-    sourceCreatedTime?: string;
-    sourceUpdatedTime?: string;
+    sourceCreatedTime?: Date;
+    sourceUpdatedTime?: Date;
     sourceCreatedUser?: string;
     sourceUpdatedUser?: string;
     confidence?: number;
@@ -585,8 +585,8 @@ export type CogniteDiagramAnnotation = IndustrialModel<
     sourceId?: string;
     sourceContext?: string;
     source?: NodeId;
-    sourceCreatedTime?: string;
-    sourceUpdatedTime?: string;
+    sourceCreatedTime?: Date;
+    sourceUpdatedTime?: Date;
     sourceCreatedUser?: string;
     sourceUpdatedUser?: string;
     confidence?: number;
