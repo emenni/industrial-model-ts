@@ -487,12 +487,12 @@ export type NumberFilters = {
 };
 export type BooleanFilters = { eq?: boolean; exists?: boolean };
 export type DateFilters = {
-  eq?: string;
-  in?: string[];
-  gt?: string;
-  gte?: string;
-  lt?: string;
-  lte?: string;
+  eq?: string | Date;
+  in?: Array<string | Date>;
+  gt?: string | Date;
+  gte?: string | Date;
+  lt?: string | Date;
+  lte?: string | Date;
   exists?: boolean;
 };
 export type NodeIdFilters = { eq?: NodeId; in?: NodeId[]; exists?: boolean };

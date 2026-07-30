@@ -150,7 +150,7 @@ describe("IndustrialModelClient", () => {
     expect(items).toHaveLength(1);
   });
 
-  it("preserves Cognite timestamp strings when result validation is disabled", async () => {
+  it("converts Cognite timestamps to Date even when result validation is disabled", async () => {
     const client = makeCogniteClientMock({
       queryItems: makeCogniteAssetQueryResultWithProperties({
         sourceCreatedTime: "2024-01-02T03:04:05.000Z",
@@ -158,16 +158,17 @@ describe("IndustrialModelClient", () => {
     });
     const model = new IndustrialModelClient(client, COGNITE_CORE_DATA_MODEL);
 
-    type Asset = IndustrialModel<{ name: string; sourceCreatedTime: string }>;
+    type Asset = IndustrialModel<{ name: string; sourceCreatedTime: Date }>;
     const { items } = await model.query<Asset>()({
       viewExternalId: "CogniteAsset",
       select: { name: true, sourceCreatedTime: true },
     });
 
-    expect(items[0]?.sourceCreatedTime).toBe("2024-01-02T03:04:05.000Z");
+    expect(items[0]?.sourceCreatedTime).toBeInstanceOf(Date);
+    expect(items[0]?.sourceCreatedTime.toISOString()).toBe("2024-01-02T03:04:05.000Z");
   });
 
-  it("validates results and converts Cognite timestamps to Date when enabled", async () => {
+  it("validates results and keeps Cognite timestamps as Date when enabled", async () => {
     const client = makeCogniteClientMock({
       queryItems: makeCogniteAssetQueryResultWithProperties({
         sourceCreatedTime: "2024-01-02T03:04:05.000Z",

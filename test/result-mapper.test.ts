@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createResultMapper, makeCogniteAssetQueryResult } from "./fixtures/index.js";
+import {
+  createResultMapper,
+  makeCogniteAssetQueryResult,
+  makeCogniteAssetQueryResultWithProperties,
+} from "./fixtures/index.js";
 
 describe("QueryResultMapper", () => {
   const mapper = createResultMapper();
@@ -20,6 +24,32 @@ describe("QueryResultMapper", () => {
         name: "Parent Asset",
       },
     });
+  });
+
+  it("coerces Cognite timestamp properties to Date", async () => {
+    const result = await mapper.mapNodes(
+      "CogniteAsset",
+      makeCogniteAssetQueryResultWithProperties({
+        sourceCreatedTime: "2024-01-02T03:04:05.000Z",
+        pathLastUpdatedTime: "2024-06-01T12:00:00.000Z",
+      }),
+    );
+
+    expect(result[0]?.sourceCreatedTime).toBeInstanceOf(Date);
+    expect((result[0]?.sourceCreatedTime as Date).toISOString()).toBe("2024-01-02T03:04:05.000Z");
+    expect(result[0]?.pathLastUpdatedTime).toBeInstanceOf(Date);
+    expect((result[0]?.pathLastUpdatedTime as Date).toISOString()).toBe("2024-06-01T12:00:00.000Z");
+  });
+
+  it("leaves invalid Cognite timestamp strings unchanged", async () => {
+    const result = await mapper.mapNodes(
+      "CogniteAsset",
+      makeCogniteAssetQueryResultWithProperties({
+        sourceCreatedTime: "not-a-date",
+      }),
+    );
+
+    expect(result[0]?.sourceCreatedTime).toBe("not-a-date");
   });
 
   it("throws when the root key is missing from the query result", async () => {
