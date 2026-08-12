@@ -23,13 +23,13 @@ describe("SortMapper", () => {
     expect(result[0]?.nullsFirst).toBe(true);
   });
 
-  it("uses nullsFirst true for ascending direct-relation sorts", () => {
+  it("uses nullsFirst false for ascending direct-relation sorts", () => {
     const result = mapper.map({ parent: "ascending" }, ASSET_VIEW);
     expect(result).toEqual([
       {
         property: ["cdf_cdm", "CogniteAsset/v1", "parent"],
         direction: "ascending",
-        nullsFirst: true,
+        nullsFirst: false,
       },
     ]);
   });
