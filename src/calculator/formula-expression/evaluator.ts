@@ -27,7 +27,7 @@ const BINARY_OPS: Record<BinaryOp, (left: number, right: number) => number> = {
     }
     return left / right;
   },
-  mod: pythonMod,
+  mod: signedMod,
   pow: safePow,
 };
 
@@ -40,8 +40,8 @@ const COMPARE_OPS: Record<CompareOp, (left: number, right: number) => boolean> =
   ge: (left, right) => left >= right,
 };
 
-/** Python's ``%`` follows the sign of the divisor, unlike JavaScript's ``%``. */
-function pythonMod(left: number, right: number): number {
+/** Remainder with the sign of the divisor, unlike JavaScript's ``%``. */
+function signedMod(left: number, right: number): number {
   if (right === 0) {
     throw new ZeroDivisionError("float modulo");
   }
@@ -49,9 +49,8 @@ function pythonMod(left: number, right: number): number {
 }
 
 /**
- * Exponentiate in float space. Mirrors the Python implementation's error
- * semantics: raising ``0`` to a negative power and overflowing results are
- * surfaced as arithmetic errors rather than silently producing infinities.
+ * Exponentiate in float space. Raising ``0`` to a negative power and
+ * overflowing results are arithmetic errors rather than silent infinities.
  */
 function safePow(base: number, exponent: number): number {
   if (base === 0 && exponent < 0) {
@@ -64,7 +63,7 @@ function safePow(base: number, exponent: number): number {
   return result;
 }
 
-/** Python truthiness for floats: only exactly ``0`` is falsy (``NaN`` is truthy). */
+/** Formula truthiness for floats: only exactly ``0`` is falsy (``NaN`` is truthy). */
 function isTruthy(value: number): boolean {
   return value !== 0;
 }

@@ -27,10 +27,7 @@ const cache = new Map<string, CompiledFormula>();
 
 /**
  * Normalize the formula text, then compile it (memoized by normalized text).
- *
- * The public entry point mirrors the Python ``compile_formula`` helper: it
- * exposes {@link clearCache} so callers can inspect or reset the compilation
- * cache.
+ * Use {@link clearCache} to inspect or reset the compilation cache.
  */
 export function compileFormula(formula: string): CompiledFormula {
   const normalized = normalizeFormulaText(formula);

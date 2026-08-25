@@ -35,10 +35,15 @@ describe("QueryResultMapper", () => {
       }),
     );
 
-    expect(result[0]?.sourceCreatedTime).toBeInstanceOf(Date);
-    expect((result[0]?.sourceCreatedTime as Date).toISOString()).toBe("2024-01-02T03:04:05.000Z");
-    expect(result[0]?.pathLastUpdatedTime).toBeInstanceOf(Date);
-    expect((result[0]?.pathLastUpdatedTime as Date).toISOString()).toBe("2024-06-01T12:00:00.000Z");
+    const item = result[0];
+    expect(item).toBeDefined();
+    if (item === undefined) {
+      return;
+    }
+    expect(item.sourceCreatedTime).toBeInstanceOf(Date);
+    expect((item.sourceCreatedTime as Date).toISOString()).toBe("2024-01-02T03:04:05.000Z");
+    expect(item.pathLastUpdatedTime).toBeInstanceOf(Date);
+    expect((item.pathLastUpdatedTime as Date).toISOString()).toBe("2024-06-01T12:00:00.000Z");
   });
 
   it("leaves invalid Cognite timestamp strings unchanged", async () => {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { CalculatorError } from "../../src/calculator/exceptions";
 import {
   ArithmeticError,
   clearCache,
@@ -7,9 +8,11 @@ import {
   FormulaError,
   InvalidFormulaError,
   MissingParameterError,
+  MissingTimeAxisError,
   OverflowError,
   ParameterError,
   ParameterLengthError,
+  ParameterTimestampError,
   ZeroDivisionError,
 } from "../../src/calculator/formula-expression";
 
@@ -56,7 +59,7 @@ describe("evaluate: arithmetic", () => {
     expect(evaluate("2 ** -1 * {A}", { A: [4] })).toEqual([2]);
   });
 
-  it("uses Python modulo semantics (sign follows the divisor)", () => {
+  it("uses remainder whose sign follows the divisor", () => {
     expect(evaluate("{A} % {B}", { A: [-5], B: [3] })).toEqual([1]);
     expect(evaluate("{A} % {B}", { A: [5], B: [-3] })).toEqual([-1]);
     expect(evaluate("{A} % {B}", { A: [5.5], B: [2] })).toEqual([1.5]);
@@ -193,6 +196,31 @@ describe("evaluate: structural errors", () => {
 
   it("exposes InvalidFormulaError as a FormulaError", () => {
     expect(() => evaluate("")).toThrow(FormulaError);
+  });
+
+  it("formula errors are catchable as calculator error", () => {
+    // FormulaError hangs off the package-wide root so a caller can catch
+    // every calculator failure - formula or retrieval - with one except.
+    expect(new FormulaError("x")).toBeInstanceOf(CalculatorError);
+    expect(() => evaluate("{A}", {})).toThrow(CalculatorError);
+  });
+
+  it("parameter timestamp error lists aliases", () => {
+    const error = new ParameterTimestampError(["A", "B"]);
+
+    expect(error).toBeInstanceOf(ParameterError);
+    expect(error.aliases).toEqual(["A", "B"]);
+    expect(error.message).toContain("timestamp mismatch");
+    expect(error.message).toContain("A");
+    expect(error.message).toContain("B");
+  });
+
+  it("missing time axis error lists aliases", () => {
+    const error = new MissingTimeAxisError(["A", "B"]);
+
+    expect(error).toBeInstanceOf(ParameterError);
+    expect(error.aliases).toEqual(["A", "B"]);
+    expect(error.message).toContain("no time-series parameter");
   });
 });
 

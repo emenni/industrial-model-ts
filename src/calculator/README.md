@@ -1,13 +1,17 @@
 # Calculator
 
-The `industrial-model/calculator` subpath computes derived time series from formulas that combine one or more source time series in Cognite Data Fusion. Each query pairs a `formula` with the `parameters` its `{alias}` placeholders resolve to. The calculator fetches every parameter's datapoints in a single de-duplicated round trip, aligns them by position, and evaluates the formula element-by-element.
+The `industrial-model/calculator` subpath computes derived time series from formulas that combine a constant, a single Cognite time series (raw or aggregated), or several time series combined with a reducer. Each query pairs a `formula` with the `parameters` its `{alias}` placeholders resolve to. The calculator fetches every time-series parameter's datapoints in a single de-duplicated round trip, aligns them on timestamp, and evaluates the formula element-by-element.
 
 The formula engine that powers it (`evaluate`) is also exported on its own, so you can evaluate formulas over in-memory numeric series without touching Cognite at all.
 
 ## Table of contents
 
 - [Quick start](#quick-start)
+- [Parameter kinds](#parameter-kinds)
 - [Aggregated parameters](#aggregated-parameters)
+- [Constants](#constants)
+- [Multiple time series per parameter](#multiple-time-series-per-parameter)
+- [Timestamp alignment](#timestamp-alignment)
 - [Evaluating several queries at once](#evaluating-several-queries-at-once)
 - [Real-world example: OEE](#real-world-example-oee)
 - [The standalone formula engine](#the-standalone-formula-engine)
@@ -28,8 +32,8 @@ const result = await calculator.calculate(
   {
     formula: "{power} / {flow} if {flow} != 0 else 0",
     parameters: [
-      { timeSeries: { space: "ts-space", externalId: "power" }, alias: "power" },
-      { timeSeries: { space: "ts-space", externalId: "flow" }, alias: "flow" },
+      { type: "single_timeseries", timeSeries: { space: "ts-space", externalId: "power" }, alias: "power" },
+      { type: "single_timeseries", timeSeries: { space: "ts-space", externalId: "flow" }, alias: "flow" },
     ],
   },
   new Date("2024-01-01T00:00:00.000Z"),
@@ -40,19 +44,37 @@ result.datapoints;
 // [{ timestamp: Date, value: number }, …]
 ```
 
-Timestamps in the result come from the **first parameter the formula actually references** — here, `power`. Parameters that share a time series (and granularity, for aggregates) are folded into a single request, so adding more parameters never triggers a duplicate fetch of the same series.
+Every parameter must include a `type` tag (`"constant"`, `"single_timeseries"`, or `"multi_timeseries"`). A JSON payload that omits `type` is rejected.
+
+Timestamps in the result come from the **shared time axis** of the query's time-series parameters. By default (`alignment: "intersect"`) that axis is the intersection of their timestamps: a point is emitted only when every time-series parameter has a value at that exact timestamp. Set `alignment: "strict"` to require identical timestamps and raise `ParameterTimestampError` if they differ. `ConstantParameter` values don't participate in this alignment — they are broadcast to the resulting length.
+
+Parameters that share a time series (and granularity, for aggregates) are folded into a single request, so adding more parameters never triggers a duplicate fetch of the same series.
+
+## Parameter kinds
+
+`CalculatorParameter` is a discriminated union of three kinds, keyed on `type`:
+
+| Kind | `type` tag | Fields | Notes |
+|---|---|---|---|
+| Constant | `"constant"` | `alias`, `value` | A fixed scalar, broadcast across every timestamp in the result. No CDF call is made for it. |
+| Single time series | `"single_timeseries"` | `alias`, `timeSeries`, `aggregateType?`, `granularity?` | Exactly one CDF time series. |
+| Multi time series | `"multi_timeseries"` | `alias`, `timeSeries` (≥ 2, unique), `reducer`, `aggregateType?`, `granularity?` | Two or more CDF time series, combined with `reducer`. `reducer` has no default. Duplicate instance ids are rejected. |
+
+`CalculatorQuery` also takes `alignment?: "intersect" | "strict"` (default `"intersect"`). Every parameter's `alias` must be unique within the query — `calculate` rejects duplicates before it talks to Cognite.
+
+Use `validateCalculatorQuery` to run the same checks on a payload you haven't passed to `Calculator` yet (for example a JSON body from an API).
 
 ## Aggregated parameters
 
-Set `aggregateType` and `granularity` on a parameter to fetch aggregates instead of raw datapoints:
+Set `aggregateType` and `granularity` on a time-series parameter to fetch aggregates instead of raw datapoints. `granularity` is required whenever `aggregateType` is set:
 
 ```ts
 const result = await calculator.calculate(
   {
     formula: "{maxTemp} - {avgTemp}",
     parameters: [
-      { timeSeries: tempTs, aggregateType: "max", granularity: "1h", alias: "maxTemp" },
-      { timeSeries: tempTs, aggregateType: "average", granularity: "1h", alias: "avgTemp" },
+      { type: "single_timeseries", timeSeries: tempTs, aggregateType: "max", granularity: "1h", alias: "maxTemp" },
+      { type: "single_timeseries", timeSeries: tempTs, aggregateType: "average", granularity: "1h", alias: "avgTemp" },
     ],
   },
   start,
@@ -64,9 +86,85 @@ Both parameters read the same time series at the same granularity, so the calcul
 
 Supported `aggregateType` values: `"average"`, `"max"`, `"min"`, `"count"`, `"sum"`, `"interpolation"`, `"stepInterpolation"`, `"totalVariation"`, `"continuousVariance"`, `"discreteVariance"`.
 
+## Constants
+
+Use a constant parameter for fixed values — conversion factors, thresholds, headcount for a shift — that don't come from a time series:
+
+```ts
+const result = await calculator.calculate(
+  {
+    formula: "{produced} * {lbsToKg}",
+    parameters: [
+      { type: "single_timeseries", timeSeries: producedTs, alias: "produced" },
+      { type: "constant", alias: "lbsToKg", value: 0.453592 },
+    ],
+  },
+  start,
+  end,
+);
+```
+
+`Calculator` never contacts CDF for a constant — its `value` is broadcast onto the timestamps established by the query's time-series parameters. A query made **only** of constants has no time axis to broadcast onto, and raises `MissingTimeAxisError`.
+
+## Multiple time series per parameter
+
+Use a multi-time-series parameter when a formula input is really an aggregation over several time series. It takes `timeSeries` (two or more) and a required `reducer`. The calculator fetches every listed time series and combines them **element-wise, by timestamp**, before the formula ever sees them:
+
+```ts
+const result = await calculator.calculate(
+  {
+    formula: "{lineTotal}",
+    parameters: [
+      {
+        type: "multi_timeseries",
+        alias: "lineTotal",
+        timeSeries: [
+          { space: "plant", externalId: "ts_line_1" },
+          { space: "plant", externalId: "ts_line_2" },
+          { space: "plant", externalId: "ts_line_3" },
+        ],
+        aggregateType: "sum",
+        granularity: "1h",
+        reducer: "sum",
+      },
+    ],
+  },
+  start,
+  end,
+);
+```
+
+If you only have one time series for a parameter, use `"single_timeseries"` instead — `"multi_timeseries"` requires at least two instance ids and rejects zero or one.
+
+**Combining behavior:**
+
+- Series are combined by **intersecting on timestamp**: a timestamp survives into the reduced series only if *every* referenced time series has a value at that exact timestamp. This is stricter than a positional zip — it won't silently pair up unrelated points if one series has a gap the others don't.
+- Because of that, **use `aggregateType` + `granularity`** whenever you reduce multiple time series. Aggregated queries bucket every series onto the same aligned time grid, so timestamps line up; raw datapoints from independent series almost never share exact timestamps, and reducing raw series will typically collapse to an empty result.
+- If the referenced series have no timestamps in common at all, the parameter's series — and therefore the formula's result — is empty.
+- `reducer` is one of `"min"`, `"max"`, `"sum"`, `"average"`.
+
+## Timestamp alignment
+
+Element-wise formulas like `{A} + {B}` are evaluated on a single time axis. `CalculatorQuery.alignment` chooses how that axis is built from the query's time-series parameters (after any multi-series reduction):
+
+| Mode | Behavior |
+|---|---|
+| `"intersect"` (default) | Keep timestamps present in **every** time-series parameter. Gaps in one series drop that timestamp from the result rather than failing the query. If there is no overlap, the result is empty. |
+| `"strict"` | Require identical timestamps at every index. Raise `ParameterTimestampError` if they differ. Use this when a missing bucket should fail the job rather than be omitted. |
+
+This is the same intersection rule used inside a multi-time-series parameter. Constants are broadcast onto whatever timestamps remain.
+
+```ts
+// default: evaluate only where A and B both have a point
+{ formula: "{A} + {B}", parameters: [paramA, paramB] }
+
+// fail if A and B don't share the exact same timestamps
+{ formula: "{A} + {B}", parameters: [paramA, paramB], alignment: "strict" }
+```
+
 ## Evaluating several queries at once
 
-`calculateMultiples` batches the datapoint retrieval for several queries into one de-duplicated round trip, returning one `CalculationResult` per query, in order:
+`calculateMultiples` batches the datapoint retrieval for several queries into one de-duplicated round trip, returning one `CalculationResult` per query, in order. Each query keeps its own `alignment`. Constants never reach Cognite.
 
 ```ts
 const [efficiency, downtime] = await calculator.calculateMultiples(
@@ -74,15 +172,15 @@ const [efficiency, downtime] = await calculator.calculateMultiples(
     {
       formula: "{good} / {total} * 100",
       parameters: [
-        { timeSeries: goodUnitsTs, alias: "good" },
-        { timeSeries: totalUnitsTs, alias: "total" },
+        { type: "single_timeseries", timeSeries: goodUnitsTs, alias: "good" },
+        { type: "single_timeseries", timeSeries: totalUnitsTs, alias: "total" },
       ],
     },
     {
       formula: "{plannedMinutes} - {runMinutes}",
       parameters: [
-        { timeSeries: plannedMinutesTs, alias: "plannedMinutes" },
-        { timeSeries: runMinutesTs, alias: "runMinutes" },
+        { type: "single_timeseries", timeSeries: plannedMinutesTs, alias: "plannedMinutes" },
+        { type: "single_timeseries", timeSeries: runMinutesTs, alias: "runMinutes" },
       ],
     },
   ],
@@ -106,25 +204,25 @@ const [availability, performance, quality, oee] = await calculator.calculateMult
       // Availability = run time / planned production time
       formula: "{runTime} / {plannedTime}",
       parameters: [
-        { timeSeries: { ...line, externalId: `${line.externalId}-run-time` }, alias: "runTime" },
-        { timeSeries: { ...line, externalId: `${line.externalId}-planned-time` }, alias: "plannedTime" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-run-time` }, alias: "runTime" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-planned-time` }, alias: "plannedTime" },
       ],
     },
     {
       // Performance = (total count * ideal cycle time) / run time
       formula: "({count} * {idealCycleTime}) / {runTime} if {runTime} != 0 else 0",
       parameters: [
-        { timeSeries: { ...line, externalId: `${line.externalId}-count` }, alias: "count" },
-        { timeSeries: { ...line, externalId: `${line.externalId}-ideal-cycle-time` }, alias: "idealCycleTime" },
-        { timeSeries: { ...line, externalId: `${line.externalId}-run-time` }, alias: "runTime" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-count` }, alias: "count" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-ideal-cycle-time` }, alias: "idealCycleTime" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-run-time` }, alias: "runTime" },
       ],
     },
     {
       // Quality = good count / total count
       formula: "{good} / {count} if {count} != 0 else 0",
       parameters: [
-        { timeSeries: { ...line, externalId: `${line.externalId}-good-count` }, alias: "good" },
-        { timeSeries: { ...line, externalId: `${line.externalId}-count` }, alias: "count" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-good-count` }, alias: "good" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-count` }, alias: "count" },
       ],
     },
     {
@@ -132,11 +230,11 @@ const [availability, performance, quality, oee] = await calculator.calculateMult
       formula:
         "(({runTime} / {plannedTime}) * (({count} * {idealCycleTime}) / {runTime}) * ({good} / {count})) if ({runTime} != 0 and {count} != 0) else 0",
       parameters: [
-        { timeSeries: { ...line, externalId: `${line.externalId}-run-time` }, alias: "runTime" },
-        { timeSeries: { ...line, externalId: `${line.externalId}-planned-time` }, alias: "plannedTime" },
-        { timeSeries: { ...line, externalId: `${line.externalId}-count` }, alias: "count" },
-        { timeSeries: { ...line, externalId: `${line.externalId}-ideal-cycle-time` }, alias: "idealCycleTime" },
-        { timeSeries: { ...line, externalId: `${line.externalId}-good-count` }, alias: "good" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-run-time` }, alias: "runTime" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-planned-time` }, alias: "plannedTime" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-count` }, alias: "count" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-ideal-cycle-time` }, alias: "idealCycleTime" },
+        { type: "single_timeseries", timeSeries: { ...line, externalId: `${line.externalId}-good-count` }, alias: "good" },
       ],
     },
   ],
@@ -146,6 +244,34 @@ const [availability, performance, quality, oee] = await calculator.calculateMult
 ```
 
 The four queries share `runTime`, `count`, `plannedTime`, `idealCycleTime`, and `good` across formulas, so `calculateMultiples` still fetches each underlying time series exactly once for the whole batch.
+
+Constants combined with a reduced multi-series parameter — total plant output across three lines, converted and compared against a target:
+
+```ts
+const result = await calculator.calculate(
+  {
+    formula: "(({linesKg} * {kgToLbs}) / {targetLbs}) * 100",
+    parameters: [
+      {
+        type: "multi_timeseries",
+        alias: "linesKg",
+        timeSeries: [
+          { space: "plant", externalId: "ts_line_1" },
+          { space: "plant", externalId: "ts_line_2" },
+          { space: "plant", externalId: "ts_line_3" },
+        ],
+        aggregateType: "sum",
+        granularity: "1h",
+        reducer: "sum",
+      },
+      { type: "constant", alias: "kgToLbs", value: 2.20462 },
+      { type: "constant", alias: "targetLbs", value: 5000 },
+    ],
+  },
+  start,
+  end,
+);
+```
 
 ## The standalone formula engine
 
@@ -197,7 +323,7 @@ evaluate("{A} / {B} if {B} != 0 else -1", { A: [10, 20], B: [2, 0] });
 // [5, -1]  — the {A} / {B} branch never runs for the second element
 ```
 
-Modulo follows Python semantics: the result takes the sign of the divisor.
+Modulo: the result takes the sign of the divisor (not JavaScript's `%`).
 
 ```ts
 evaluate("{A} % {B}", { A: [-7], B: [3] }); // [2], not [-1]
@@ -205,16 +331,31 @@ evaluate("{A} % {B}", { A: [-7], B: [3] }); // [2], not [-1]
 
 ## Error handling
 
-Structural problems throw a subclass of `FormulaError`:
+Every exception the package raises derives from `CalculatorError`, so `catch (error) { if (error instanceof CalculatorError) … }` catches the lot. `ArithmeticError` is deliberately **not** a `CalculatorError` — it depends on the data, not the formula.
+
+```
+CalculatorError
+├── DatapointsRetrievalError
+└── FormulaError
+    ├── InvalidFormulaError
+    ├── MissingParameterError
+    └── ParameterError
+        ├── ParameterLengthError
+        ├── ParameterTimestampError
+        └── MissingTimeAxisError
+```
 
 | Error | Raised when |
 |---|---|
 | `InvalidFormulaError` | The formula has invalid syntax or uses an unsupported operation |
 | `MissingParameterError` | The formula references a `{alias}` that wasn't provided in `parameters` |
 | `ParameterError` | A parameter value is not a valid numeric sequence |
-| `ParameterLengthError` | Referenced parameters don't all share the same length |
+| `ParameterLengthError` | Referenced parameters don't all share the same length. Direct `evaluate()` calls raise this; `Calculator` aligns on timestamps before calling `evaluate`. |
+| `ParameterTimestampError` | A query with `alignment: "strict"` has time-series parameters that do not share the same timestamps at every index |
+| `MissingTimeAxisError` | A query has parameters but none of them are time-series parameters, so there are no timestamps to broadcast its constants onto |
+| `DatapointsRetrievalError` | Cognite returned datapoints the retriever cannot use (a short response, or non-numeric datapoints) |
 
-Value-dependent arithmetic failures throw a subclass of `ArithmeticError` instead, deliberately kept separate from `FormulaError` because they depend on the data, not the formula:
+Value-dependent arithmetic failures throw a subclass of `ArithmeticError` instead:
 
 | Error | Raised when |
 |---|---|
@@ -242,7 +383,7 @@ try {
 }
 ```
 
-When every referenced parameter is an empty series, the result is an empty array; a mix of empty and non-empty parameters is a length mismatch (`ParameterLengthError`).
+When every referenced parameter is an empty series, the result is an empty array; a mix of empty and non-empty parameters is a length mismatch (`ParameterLengthError`). `Calculator` aligns on timestamps first, so a mix of empty and non-empty *time series* becomes an empty result under `"intersect"` rather than a length error.
 
 ## API reference
 
@@ -258,10 +399,22 @@ When every referenced parameter is an empty series, the result is an empty array
 
 | Type | Description |
 |---|---|
-| `CalculatorQuery` | `{ formula: string; parameters: CalculatorParameter[] }` |
-| `CalculatorParameter` | `{ timeSeries: NodeId; alias: string; aggregateType?: DatapointAggregate; granularity?: string }` |
+| `CalculatorQuery` | `{ formula: string; parameters: CalculatorParameter[]; alignment?: AlignmentMode }` |
+| `CalculatorParameter` | Discriminated union of `ConstantParameter`, `TimeSeriesParameter`, `MultiTimeSeriesParameter` |
+| `ConstantParameter` | `{ type: "constant"; alias: string; value: number }` |
+| `TimeSeriesParameter` | `{ type: "single_timeseries"; timeSeries: NodeId; alias: string; aggregateType?: DatapointAggregate; granularity?: string }` |
+| `MultiTimeSeriesParameter` | `{ type: "multi_timeseries"; timeSeries: NodeId[]; alias: string; reducer: ReducerType; aggregateType?: DatapointAggregate; granularity?: string }` |
+| `ReducerType` | `"min" \| "max" \| "sum" \| "average"` |
+| `AlignmentMode` | `"intersect" \| "strict"` |
 | `CalculationResult` | `{ query: CalculatorQuery; datapoints: DataPoint[] }` |
 | `DataPoint` | `{ timestamp: Date; value: number }` |
+
+### Validation
+
+| Export | Description |
+|---|---|
+| `validateCalculatorQuery(query)` | Rejects a query the calculator cannot evaluate (duplicate aliases, missing `type`, aggregate without granularity, …) |
+| `validateCalculatorQueries(queries)` | Same checks across a batch, reporting every problem |
 
 ### Formula engine
 

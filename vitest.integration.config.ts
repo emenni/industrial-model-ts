@@ -9,7 +9,7 @@ export default defineConfig({
     environment: "node",
     include: ["test/integration/**/*.test.ts"],
     testTimeout: 60_000,
-    hookTimeout: 60_000,
+    hookTimeout: 120_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],

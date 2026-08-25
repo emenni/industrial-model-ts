@@ -1,16 +1,17 @@
 /**
  * Structural formula problems (bad syntax, unknown identifiers, missing
- * parameters, mismatched lengths, non-numeric values) are reported as a
- * subclass of {@link FormulaError}.
+ * parameters, mismatched lengths or timestamps, non-numeric values) are
+ * reported as a subclass of {@link FormulaError}.
  *
  * Value-dependent arithmetic failures (division/modulo by zero, overflowing
- * exponentiation) are intentionally *not* {@link FormulaError}s: they mirror
- * the native errors raised by the Python implementation and extend
+ * exponentiation) are intentionally *not* {@link FormulaError}s: they extend
  * {@link ArithmeticError} instead.
  */
 
+import { CalculatorError } from "../exceptions";
+
 /** Base error for every structural formula problem. */
-export class FormulaError extends Error {
+export class FormulaError extends CalculatorError {
   constructor(message: string) {
     super(message);
     this.name = "FormulaError";
@@ -58,9 +59,34 @@ export class ParameterLengthError extends ParameterError {
   }
 }
 
+/** Raised when a query has only constants and so has no time axis. */
+export class MissingTimeAxisError extends ParameterError {
+  readonly aliases: readonly string[];
+
+  constructor(aliases: string[]) {
+    super(
+      "query has no time-series parameter to define a time axis; " +
+        `only constant parameter(s): ${aliases.join(", ")}`,
+    );
+    this.name = "MissingTimeAxisError";
+    this.aliases = [...aliases];
+  }
+}
+
+/** Raised when time-series parameters do not share the same timestamps. */
+export class ParameterTimestampError extends ParameterError {
+  readonly aliases: readonly string[];
+
+  constructor(aliases: string[]) {
+    super(`parameter timestamp mismatch: ${aliases.join(", ")} do not share the same timestamps`);
+    this.name = "ParameterTimestampError";
+    this.aliases = [...aliases];
+  }
+}
+
 /**
- * Base for value-dependent arithmetic failures. Mirrors Python's built-in
- * ``ArithmeticError`` and is deliberately separate from {@link FormulaError}.
+ * Base for value-dependent arithmetic failures. Deliberately separate from
+ * {@link FormulaError} because these depend on the data, not the formula.
  */
 export class ArithmeticError extends Error {
   constructor(message: string) {
