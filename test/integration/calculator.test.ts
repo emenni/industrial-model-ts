@@ -399,14 +399,13 @@ describeIntegration("integration calculator", () => {
     expect(values(result)).toEqual([100, 110, 120, 130, 140].map((value) => value * 0.453592));
   });
 
-  it.each([
+  for (const [reducer, expected] of [
     ["sum", [600, 630]],
     ["average", [200, 210]],
     ["min", [100, 110]],
     ["max", [300, 310]],
-  ] as const)(
-    "multi timeseries reducer against real hourly aggregates (%s)",
-    async (reducer, expected) => {
+  ] as const) {
+    it(`multi timeseries reducer against real hourly aggregates (${reducer})`, async () => {
       const lines: MultiTimeSeriesParameter = {
         type: "multi_timeseries",
         alias: "LINES",
@@ -426,8 +425,8 @@ describeIntegration("integration calculator", () => {
       // empty trailing bucket rather than returning a null/zero for it.
       expect(result.datapoints).toHaveLength(2);
       expect(values(result)).toEqual([...expected]);
-    },
-  );
+    });
+  }
 
   it("multi timeseries reducer drops buckets missing from any series", async () => {
     // gap_b has no raw datapoints in the first hourly bucket. If CDF's
