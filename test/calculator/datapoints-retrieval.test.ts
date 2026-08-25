@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { DatapointsRetriever } from "../../src/calculator/datapoints-retrieval";
-import type { CalculatorParameter } from "../../src/calculator/models";
+import { CalculatorError } from "../../src/calculator/exceptions";
+import type { AnyTimeSeriesParameter, MultiTimeSeriesParameter } from "../../src/calculator/models";
 import type { CognitePort } from "../../src/cognite";
+import type { DatapointAggregate, NodeId } from "../../src/types";
 import { makeCogniteMock } from "../fixtures/index.js";
 
 const TS_A = { space: "ts-space", externalId: "temperature" };
@@ -27,11 +29,36 @@ function makeRetriever(resultItems: unknown[]): {
   return { retriever: new DatapointsRetriever(cognite), cognite };
 }
 
-function rawParam(
-  timeSeries: { space: string; externalId: string },
+function rawParam(timeSeries: NodeId, alias: string): AnyTimeSeriesParameter {
+  return { type: "single_timeseries", timeSeries, alias };
+}
+
+function aggregateParam(
+  timeSeries: NodeId,
   alias: string,
-): CalculatorParameter {
-  return { timeSeries, alias };
+  aggregateType: DatapointAggregate,
+  granularity = "1h",
+): AnyTimeSeriesParameter {
+  return { type: "single_timeseries", timeSeries, alias, aggregateType, granularity };
+}
+
+function multiParam(
+  timeSeries: NodeId[],
+  alias: string,
+  options: { aggregateType?: DatapointAggregate; granularity?: string } = {},
+): MultiTimeSeriesParameter {
+  const base = { type: "multi_timeseries", timeSeries, alias, reducer: "sum" } as const;
+  return options.aggregateType === undefined
+    ? base
+    : {
+        ...base,
+        aggregateType: options.aggregateType,
+        granularity: options.granularity ?? "1h",
+      };
+}
+
+function requestItems(cognite: CognitePort, call = 0) {
+  return vi.mocked(cognite.retrieveDatapoints).mock.calls[call]?.[0]?.items ?? [];
 }
 
 // A Cognite mock that echoes each request item back as a result item whose
@@ -52,7 +79,7 @@ function makePaginatingRetriever(): {
   return { retriever: new DatapointsRetriever(cognite), cognite };
 }
 
-describe("DatapointsRetriever.retrieveDatapoints", () => {
+describe("DatapointsRetriever: request building and de-duplication", () => {
   it("returns an empty result per parameter without calling Cognite when there are no parameters", async () => {
     const { retriever, cognite } = makeRetriever([]);
 
@@ -62,7 +89,279 @@ describe("DatapointsRetriever.retrieveDatapoints", () => {
     expect(cognite.retrieveDatapoints).not.toHaveBeenCalled();
   });
 
-  it("retrieves a single raw series and parses its datapoints", async () => {
+  it("same timeseries and granularity with different aggregates are merged", async () => {
+    const { retriever, cognite } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, average: 5, max: 9 }] }),
+    ]);
+
+    await retriever.retrieveDatapoints(
+      [aggregateParam(TS_A, "A", "average"), aggregateParam(TS_A, "B", "max")],
+      START,
+      END,
+    );
+
+    expect(requestItems(cognite)).toHaveLength(1);
+    expect(requestItems(cognite)[0]).toMatchObject({
+      space: TS_A.space,
+      externalId: TS_A.externalId,
+      aggregates: ["average", "max"],
+      granularity: "1h",
+    });
+  });
+
+  it("repeated aggregate on same series is not duplicated", async () => {
+    const { retriever, cognite } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, average: 5 }] }),
+    ]);
+
+    await retriever.retrieveDatapoints(
+      [aggregateParam(TS_A, "A", "average"), aggregateParam(TS_A, "B", "average")],
+      START,
+      END,
+    );
+
+    expect(requestItems(cognite)).toHaveLength(1);
+    expect(requestItems(cognite)[0]?.aggregates).toEqual(["average"]);
+  });
+
+  it("same timeseries different granularity produces separate requests", async () => {
+    const { retriever, cognite } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, average: 1 }] }),
+      makeResultItem({ datapoints: [{ timestamp: T0, average: 2 }] }),
+    ]);
+
+    const result = await retriever.retrieveDatapoints(
+      [aggregateParam(TS_A, "A", "average", "1h"), aggregateParam(TS_A, "B", "average", "1d")],
+      START,
+      END,
+    );
+
+    expect(requestItems(cognite)).toHaveLength(2);
+    expect(result[0]?.[0]?.[0]?.value).toBe(1);
+    expect(result[1]?.[0]?.[0]?.value).toBe(2);
+  });
+
+  it("raw and aggregate for same series are distinct requests", async () => {
+    const { retriever, cognite } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, value: 100 }] }),
+      makeResultItem({ datapoints: [{ timestamp: T0, average: 50 }] }),
+    ]);
+
+    const result = await retriever.retrieveDatapoints(
+      [rawParam(TS_A, "raw"), aggregateParam(TS_A, "agg", "average")],
+      START,
+      END,
+    );
+
+    expect(requestItems(cognite)).toHaveLength(2);
+    expect(result[0]?.[0]?.[0]?.value).toBe(100);
+    expect(result[1]?.[0]?.[0]?.value).toBe(50);
+  });
+
+  it("merged aggregates pull their own column per parameter", async () => {
+    const { retriever } = makeRetriever([
+      makeResultItem({
+        datapoints: [
+          { timestamp: T0, average: 10, sum: 100 },
+          { timestamp: T1, average: 20, sum: 200 },
+        ],
+      }),
+    ]);
+
+    const result = await retriever.retrieveDatapoints(
+      [aggregateParam(TS_A, "A", "average"), aggregateParam(TS_A, "B", "sum")],
+      START,
+      END,
+    );
+
+    expect(result[0]?.[0]?.map((point) => point.value)).toEqual([10, 20]);
+    expect(result[1]?.[0]?.map((point) => point.value)).toEqual([100, 200]);
+  });
+
+  it("shared instance id across parameters reuses one request", async () => {
+    const { retriever, cognite } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, average: 5 }] }),
+    ]);
+
+    await retriever.retrieveDatapoints(
+      [aggregateParam(TS_A, "A", "average"), aggregateParam(TS_A, "B", "average")],
+      START,
+      END,
+    );
+
+    expect(requestItems(cognite)).toHaveLength(1);
+  });
+
+  it("shared instance id across parameters yields the same leaf series", async () => {
+    const { retriever } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, average: 5 }] }),
+    ]);
+
+    const result = await retriever.retrieveDatapoints(
+      [aggregateParam(TS_A, "A", "average"), aggregateParam(TS_A, "B", "average")],
+      START,
+      END,
+    );
+
+    const expected = [{ timestamp: T0, value: 5 }];
+    expect(result[0]?.[0]).toEqual(expected);
+    expect(result[1]?.[0]).toEqual(expected);
+  });
+
+  it("retrieve datapoints preserves parameter order", async () => {
+    const TS_C = { space: "ts-space", externalId: "flow" };
+    const { retriever } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, value: 1 }] }),
+      makeResultItem({ datapoints: [{ timestamp: T0, value: 2 }] }),
+      makeResultItem({ datapoints: [{ timestamp: T0, value: 3 }] }),
+    ]);
+
+    const result = await retriever.retrieveDatapoints(
+      [rawParam(TS_A, "A"), rawParam(TS_B, "B"), rawParam(TS_C, "C")],
+      START,
+      END,
+    );
+
+    expect(result[0]?.[0]?.[0]?.value).toBe(1);
+    expect(result[1]?.[0]?.[0]?.value).toBe(2);
+    expect(result[2]?.[0]?.[0]?.value).toBe(3);
+  });
+});
+
+describe("DatapointsRetriever: leaf series per parameter", () => {
+  it("single instance id param returns one leaf series", async () => {
+    const { retriever } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, value: 1 }] }),
+    ]);
+
+    const result = await retriever.retrieveDatapoints([rawParam(TS_A, "A")], START, END);
+
+    expect(result[0]).toHaveLength(1);
+    expect(result[0]?.[0]?.map((point) => point.value)).toEqual([1]);
+  });
+
+  it("multi instance param requests one series per instance", async () => {
+    const { retriever, cognite } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, average: 1 }] }),
+      makeResultItem({ datapoints: [{ timestamp: T0, average: 2 }] }),
+    ]);
+
+    await retriever.retrieveDatapoints(
+      [multiParam([TS_A, TS_B], "A", { aggregateType: "average" })],
+      START,
+      END,
+    );
+
+    expect(requestItems(cognite)).toHaveLength(2);
+  });
+
+  it("multi instance param returns each leaf series unreduced", async () => {
+    // DatapointsRetriever only fetches and parses data - combining a
+    // parameter's series (via its reducer) is the caller's responsibility.
+    const { retriever } = makeRetriever([
+      makeResultItem({
+        datapoints: [
+          { timestamp: T0, average: 1 },
+          { timestamp: T1, average: 2 },
+        ],
+      }),
+      makeResultItem({
+        datapoints: [
+          { timestamp: T0, average: 10 },
+          { timestamp: T1, average: 20 },
+        ],
+      }),
+    ]);
+
+    const result = await retriever.retrieveDatapoints(
+      [multiParam([TS_A, TS_B], "A", { aggregateType: "average" })],
+      START,
+      END,
+    );
+
+    expect(result).toHaveLength(1);
+    // One leaf series per instance id, not reduced.
+    expect(result[0]).toHaveLength(2);
+    expect(result[0]?.[0]?.map((point) => point.value)).toEqual([1, 2]);
+    expect(result[0]?.[1]?.map((point) => point.value)).toEqual([10, 20]);
+  });
+
+  it("mixed raw and multi instance aggregate params in one batch", async () => {
+    const rawTs = { space: "ts-space", externalId: "raw-ts" };
+    const aggTs1 = { space: "ts-space", externalId: "agg-ts-1" };
+    const aggTs2 = { space: "ts-space", externalId: "agg-ts-2" };
+    const { retriever } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, value: 1 }] }),
+      makeResultItem({ datapoints: [{ timestamp: T0, average: 2 }] }),
+      makeResultItem({ datapoints: [{ timestamp: T0, average: 3 }] }),
+    ]);
+
+    const result = await retriever.retrieveDatapoints(
+      [rawParam(rawTs, "A"), multiParam([aggTs1, aggTs2], "B", { aggregateType: "average" })],
+      START,
+      END,
+    );
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toHaveLength(1); // raw param: one leaf series
+    expect(result[1]).toHaveLength(2); // multi param: two leaf series, unreduced
+    expect(result[0]?.[0]?.map((point) => point.value)).toEqual([1]);
+    expect(result[1]?.[0]?.map((point) => point.value)).toEqual([2]);
+    expect(result[1]?.[1]?.map((point) => point.value)).toEqual([3]);
+  });
+});
+
+describe("DatapointsRetriever: response parsing", () => {
+  it("parse datapoints drops none values and aligns timestamps", async () => {
+    const { retriever } = makeRetriever([
+      makeResultItem({
+        datapoints: [
+          { timestamp: T0, value: 1 },
+          { timestamp: T1, value: null },
+          { timestamp: new Date("2024-01-01T02:00:00.000Z"), value: 3 },
+        ],
+      }),
+    ]);
+
+    const result = await retriever.retrieveDatapoints([rawParam(TS_A, "A")], START, END);
+
+    expect(result[0]?.[0]?.map((point) => point.value)).toEqual([1, 3]);
+    expect(result[0]?.[0]?.[0]?.timestamp).toEqual(T0);
+  });
+
+  it("missing column is treated as empty series", async () => {
+    const { retriever } = makeRetriever([makeResultItem({ datapoints: [{ timestamp: T0 }] })]);
+
+    const result = await retriever.retrieveDatapoints([rawParam(TS_A, "A")], START, END);
+
+    expect(result).toEqual([[[]]]);
+  });
+
+  it("missing aggregate column is treated as empty series", async () => {
+    const { retriever } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, sum: 1 }] }),
+    ]);
+
+    const result = await retriever.retrieveDatapoints(
+      [aggregateParam(TS_A, "A", "average")],
+      START,
+      END,
+    );
+
+    expect(result).toEqual([[[]]]);
+  });
+
+  it("reads the raw 'value' field, ignoring same-named aggregate keys", async () => {
+    const { retriever } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, value: 1, average: 999 }] }),
+    ]);
+
+    const result = await retriever.retrieveDatapoints([rawParam(TS_A, "A")], START, END);
+
+    expect(result[0]?.[0]).toEqual([{ timestamp: T0, value: 1 }]);
+  });
+
+  it("retrieves a single raw series and forwards the window", async () => {
     const { retriever, cognite } = makeRetriever([
       makeResultItem({
         datapoints: [
@@ -76,8 +375,10 @@ describe("DatapointsRetriever.retrieveDatapoints", () => {
 
     expect(result).toEqual([
       [
-        { timestamp: T0, value: 10 },
-        { timestamp: T1, value: 20 },
+        [
+          { timestamp: T0, value: 10 },
+          { timestamp: T1, value: 20 },
+        ],
       ],
     ]);
     expect(cognite.retrieveDatapoints).toHaveBeenCalledWith({
@@ -86,130 +387,10 @@ describe("DatapointsRetriever.retrieveDatapoints", () => {
       end: END,
     });
   });
+});
 
-  it("de-duplicates raw requests that share a time series", async () => {
-    const { retriever, cognite } = makeRetriever([
-      makeResultItem({ datapoints: [{ timestamp: T0, value: 42 }] }),
-    ]);
-
-    const result = await retriever.retrieveDatapoints(
-      [rawParam(TS_A, "A"), rawParam(TS_A, "B")],
-      START,
-      END,
-    );
-
-    // Only one request is issued...
-    const call = vi.mocked(cognite.retrieveDatapoints).mock.calls[0]?.[0];
-    expect(call?.items).toHaveLength(1);
-    // ...but both parameters resolve to the same parsed series.
-    expect(result).toEqual([[{ timestamp: T0, value: 42 }], [{ timestamp: T0, value: 42 }]]);
-  });
-
-  it("preserves per-parameter order across multiple time series", async () => {
-    const { retriever } = makeRetriever([
-      makeResultItem({ datapoints: [{ timestamp: T0, value: 1 }] }),
-      makeResultItem({ datapoints: [{ timestamp: T0, value: 2 }] }),
-    ]);
-
-    const result = await retriever.retrieveDatapoints(
-      [rawParam(TS_A, "A"), rawParam(TS_B, "B")],
-      START,
-      END,
-    );
-
-    expect(result[0]?.[0]?.value).toBe(1);
-    expect(result[1]?.[0]?.value).toBe(2);
-  });
-
-  it("accumulates aggregates for parameters sharing a time series and granularity", async () => {
-    const { retriever, cognite } = makeRetriever([
-      makeResultItem({
-        datapoints: [{ timestamp: T0, average: 5, max: 9 }],
-      }),
-    ]);
-
-    const params: CalculatorParameter[] = [
-      { timeSeries: TS_A, aggregateType: "average", granularity: "1h", alias: "A" },
-      { timeSeries: TS_A, aggregateType: "max", granularity: "1h", alias: "B" },
-    ];
-    const result = await retriever.retrieveDatapoints(params, START, END);
-
-    const call = vi.mocked(cognite.retrieveDatapoints).mock.calls[0]?.[0];
-    expect(call?.items).toHaveLength(1);
-    expect(call?.items[0]).toMatchObject({
-      space: TS_A.space,
-      externalId: TS_A.externalId,
-      aggregates: ["average", "max"],
-      granularity: "1h",
-    });
-    expect(result).toEqual([[{ timestamp: T0, value: 5 }], [{ timestamp: T0, value: 9 }]]);
-  });
-
-  it("issues separate requests for the same series with different granularities", async () => {
-    const { retriever, cognite } = makeRetriever([
-      makeResultItem({ datapoints: [{ timestamp: T0, average: 1 }] }),
-      makeResultItem({ datapoints: [{ timestamp: T0, average: 2 }] }),
-    ]);
-
-    const params: CalculatorParameter[] = [
-      { timeSeries: TS_A, aggregateType: "average", granularity: "1h", alias: "A" },
-      { timeSeries: TS_A, aggregateType: "average", granularity: "1d", alias: "B" },
-    ];
-    const result = await retriever.retrieveDatapoints(params, START, END);
-
-    const call = vi.mocked(cognite.retrieveDatapoints).mock.calls[0]?.[0];
-    expect(call?.items).toHaveLength(2);
-    expect(result[0]?.[0]?.value).toBe(1);
-    expect(result[1]?.[0]?.value).toBe(2);
-  });
-
-  it("keeps raw and aggregate requests for the same series separate", async () => {
-    const { retriever, cognite } = makeRetriever([
-      makeResultItem({ datapoints: [{ timestamp: T0, value: 100 }] }),
-      makeResultItem({ datapoints: [{ timestamp: T0, average: 50 }] }),
-    ]);
-
-    const params: CalculatorParameter[] = [
-      { timeSeries: TS_A, alias: "raw" },
-      { timeSeries: TS_A, aggregateType: "average", granularity: "1h", alias: "agg" },
-    ];
-    const result = await retriever.retrieveDatapoints(params, START, END);
-
-    const call = vi.mocked(cognite.retrieveDatapoints).mock.calls[0]?.[0];
-    expect(call?.items).toHaveLength(2);
-    expect(result[0]?.[0]?.value).toBe(100);
-    expect(result[1]?.[0]?.value).toBe(50);
-  });
-
-  it("skips datapoints whose value is null or missing", async () => {
-    const { retriever } = makeRetriever([
-      makeResultItem({
-        datapoints: [
-          { timestamp: T0, value: 1 },
-          { timestamp: T1, value: null },
-          { timestamp: new Date("2024-01-01T02:00:00.000Z") },
-        ],
-      }),
-    ]);
-
-    const result = await retriever.retrieveDatapoints([rawParam(TS_A, "A")], START, END);
-
-    expect(result[0]).toEqual([{ timestamp: T0, value: 1 }]);
-  });
-
-  it("throws when an aggregate parameter is missing granularity", async () => {
-    const { retriever } = makeRetriever([]);
-
-    await expect(
-      retriever.retrieveDatapoints(
-        [{ timeSeries: TS_A, aggregateType: "average", alias: "A" }],
-        START,
-        END,
-      ),
-    ).rejects.toThrow(/Missing granularity for 'A' with aggregate 'average'/);
-  });
-
-  it("throws when a returned series is a string time series", async () => {
+describe("DatapointsRetriever: error handling", () => {
+  it("non numeric datapoints type is rejected", async () => {
     const { retriever } = makeRetriever([makeResultItem({ isString: true })]);
 
     await expect(retriever.retrieveDatapoints([rawParam(TS_A, "A")], START, END)).rejects.toThrow(
@@ -217,25 +398,41 @@ describe("DatapointsRetriever.retrieveDatapoints", () => {
     );
   });
 
-  it("throws when Cognite returns fewer result items than requested", async () => {
-    const { retriever } = makeRetriever([]);
+  it("short cdf response is rejected", async () => {
+    const { retriever } = makeRetriever([
+      makeResultItem({ datapoints: [{ timestamp: T0, value: 1 }] }),
+    ]);
+
+    await expect(
+      retriever.retrieveDatapoints([rawParam(TS_A, "A"), rawParam(TS_B, "B")], START, END),
+    ).rejects.toThrow(/expected 2 datapoint series from CDF, got 1/);
+  });
+
+  it("every retriever error is catchable as calculator error", async () => {
+    const { retriever } = makeRetriever([makeResultItem({ isString: true })]);
 
     await expect(retriever.retrieveDatapoints([rawParam(TS_A, "A")], START, END)).rejects.toThrow(
-      /missing datapoints response for parameter 'A'/,
+      CalculatorError,
     );
   });
 
-  it("reads the raw 'value' field, ignoring same-named aggregate keys", async () => {
-    const { retriever } = makeRetriever([
-      makeResultItem({ datapoints: [{ timestamp: T0, value: 1, average: 999 }] }),
-    ]);
+  it("throws when an aggregate parameter is missing granularity", async () => {
+    // `validateCalculatorQuery` normally catches this first; the retriever
+    // still guards it for a parameter that skipped validation.
+    const { retriever } = makeRetriever([]);
 
-    const result = await retriever.retrieveDatapoints([rawParam(TS_A, "A")], START, END);
-
-    expect(result[0]).toEqual([{ timestamp: T0, value: 1 }]);
+    await expect(
+      retriever.retrieveDatapoints(
+        [{ type: "single_timeseries", timeSeries: TS_A, aggregateType: "average", alias: "A" }],
+        START,
+        END,
+      ),
+    ).rejects.toThrow(/Missing granularity for 'A' with aggregate 'average'/);
   });
+});
 
-  it("paginates requests for more than 100 unique time series", async () => {
+describe("DatapointsRetriever: pagination", () => {
+  it("more than 100 timeseries are paginated across requests", async () => {
     const { retriever, cognite } = makePaginatingRetriever();
 
     const params = Array.from({ length: 150 }, (_, index) =>
@@ -244,11 +441,11 @@ describe("DatapointsRetriever.retrieveDatapoints", () => {
     const result = await retriever.retrieveDatapoints(params, START, END);
 
     expect(cognite.retrieveDatapoints).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(cognite.retrieveDatapoints).mock.calls[0]?.[0]?.items).toHaveLength(100);
-    expect(vi.mocked(cognite.retrieveDatapoints).mock.calls[1]?.[0]?.items).toHaveLength(50);
-    expect(result[0]?.[0]?.value).toBe(0);
-    expect(result[99]?.[0]?.value).toBe(99);
-    expect(result[149]?.[0]?.value).toBe(149);
+    expect(requestItems(cognite, 0)).toHaveLength(100);
+    expect(requestItems(cognite, 1)).toHaveLength(50);
+    expect(result[0]?.[0]?.[0]?.value).toBe(0);
+    expect(result[99]?.[0]?.[0]?.value).toBe(99);
+    expect(result[149]?.[0]?.[0]?.value).toBe(149);
   });
 
   it("issues a single request for exactly 100 unique time series", async () => {
@@ -260,9 +457,9 @@ describe("DatapointsRetriever.retrieveDatapoints", () => {
     const result = await retriever.retrieveDatapoints(params, START, END);
 
     expect(cognite.retrieveDatapoints).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(cognite.retrieveDatapoints).mock.calls[0]?.[0]?.items).toHaveLength(100);
-    expect(result[0]?.[0]?.value).toBe(0);
-    expect(result[99]?.[0]?.value).toBe(99);
+    expect(requestItems(cognite)).toHaveLength(100);
+    expect(result[0]?.[0]?.[0]?.value).toBe(0);
+    expect(result[99]?.[0]?.[0]?.value).toBe(99);
   });
 
   it("de-duplicates before paginating so shared series stay in one request", async () => {
@@ -275,10 +472,9 @@ describe("DatapointsRetriever.retrieveDatapoints", () => {
     const result = await retriever.retrieveDatapoints(params, START, END);
 
     expect(cognite.retrieveDatapoints).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(cognite.retrieveDatapoints).mock.calls[0]?.[0]?.items).toHaveLength(1);
-    // Every parameter resolves to the same de-duplicated series.
+    expect(requestItems(cognite)).toHaveLength(1);
     expect(result).toHaveLength(150);
-    expect(result.every((series) => series[0]?.value === 7)).toBe(true);
+    expect(result.every((leafSeries) => leafSeries[0]?.[0]?.value === 7)).toBe(true);
   });
 
   it("forwards the shared start and end window to every paginated request", async () => {

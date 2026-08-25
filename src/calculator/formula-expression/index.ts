@@ -6,9 +6,11 @@ export {
   FormulaError,
   InvalidFormulaError,
   MissingParameterError,
+  MissingTimeAxisError,
   OverflowError,
   ParameterError,
   ParameterLengthError,
+  ParameterTimestampError,
   ZeroDivisionError,
 } from "./exceptions";
 export type { EvaluationResult, Parameters, ParameterValue } from "./types";

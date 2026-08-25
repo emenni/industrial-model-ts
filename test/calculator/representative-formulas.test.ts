@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { evaluate } from "../../src/calculator/formula-expression";
 
-// Formulas taken from the Python reference implementation's test fixtures. They
-// represent real production calculations and exercise the full arithmetic
-// surface (nested parentheses, mixed scales, unit conversions).
+// Production-style formulas that exercise nested parentheses, mixed scales,
+// and unit conversions.
 const REPRESENTATIVE_FORMULAS = [
   "(({APD} + {AED}) / {AVD}) - (({FPD} + {FED}) / {FVD})",
   "{APV}/{HEADCOUNT}",
@@ -85,7 +84,7 @@ function parameterNames(formula: string): string[] {
  * engine directly. This is a deliberately separate implementation from the
  * library's AST-walking interpreter, so a match between the two is strong
  * evidence of correctness. All test datasets use strictly positive values, so
- * JavaScript's `%` and `**` agree with the interpreter's Python semantics.
+ * JavaScript's `%` and `**` agree with the interpreter's remainder and power.
  */
 function referenceEvaluate(formula: string, parameters: Record<string, number[]>): number[] {
   const names = parameterNames(formula);
