@@ -9,8 +9,14 @@ import type {
   ViewDefinition,
   ViewReference,
 } from "../cognite";
-import { DEFAULT_LIMIT, EDGE_MARKER, MAX_LIMIT, NESTED_SEP } from "../constants";
-import type { QueryOptions, QuerySelect } from "../types";
+import { DEFAULT_LIMIT, EDGE_MARKER, MAX_LIMIT, MAX_QUERY_ROOTS, NESTED_SEP } from "../constants";
+import type {
+  QueryManyOptions,
+  QueryOptions,
+  QueryRootSpec,
+  QuerySelect,
+  SortDirection,
+} from "../types";
 import {
   buildSelect,
   getDirectRelationSource,
@@ -39,51 +45,128 @@ export class QueryMapper {
   }
 
   async map<TModel>(options: QueryOptions<TModel>): Promise<InstancesQueryRequest> {
+    return this.mapMany({
+      roots: [
+        {
+          key: options.viewExternalId,
+          viewExternalId: options.viewExternalId,
+          ...(options.select !== undefined
+            ? { select: options.select as Record<string, unknown> }
+            : {}),
+          ...(options.filters !== undefined
+            ? { filters: options.filters as Record<string, unknown> }
+            : {}),
+          ...(options.sort !== undefined
+            ? { sort: options.sort as Record<string, SortDirection> }
+            : {}),
+          ...(options.limit !== undefined ? { limit: options.limit } : {}),
+          ...(options.cursor !== undefined ? { cursor: options.cursor } : {}),
+        },
+      ],
+    });
+  }
+
+  async mapMany(options: QueryManyOptions): Promise<InstancesQueryRequest> {
+    this.validateManyOptions(options);
+
+    const withExprs: Record<string, QueryTableExpression> = {};
+    const selectExprs: Record<string, QuerySelectExpression | Record<string, never>> = {};
+    const cursors: Record<string, string> = {};
+
+    for (const root of options.roots) {
+      await this.appendRoot(root, withExprs, selectExprs, cursors);
+    }
+
+    return { with: withExprs, select: selectExprs, cursors };
+  }
+
+  private validateManyOptions(options: QueryManyOptions): void {
+    const { roots } = options;
+    if (!Array.isArray(roots) || roots.length === 0) {
+      throw new Error("Invalid queryMany options:\n- roots: at least one root is required");
+    }
+    if (roots.length > MAX_QUERY_ROOTS) {
+      throw new Error(
+        `Invalid queryMany options:\n- roots: at most ${MAX_QUERY_ROOTS} roots are allowed`,
+      );
+    }
+
+    const seen = new Set<string>();
+    const errors: string[] = [];
+    for (let i = 0; i < roots.length; i++) {
+      const root = roots[i];
+      if (root == null || typeof root.key !== "string" || root.key.length === 0) {
+        errors.push(`roots.${i}.key: must be a non-empty string`);
+        continue;
+      }
+      if (root.key.includes(NESTED_SEP)) {
+        errors.push(`roots.${i}.key: must not contain "${NESTED_SEP}"`);
+      }
+      if (seen.has(root.key)) {
+        errors.push(`roots.${i}.key: duplicate key "${root.key}"`);
+      }
+      seen.add(root.key);
+    }
+
+    if (errors.length > 0) {
+      throw new Error(`Invalid queryMany options:\n${errors.map((e) => `- ${e}`).join("\n")}`);
+    }
+  }
+
+  private async appendRoot(
+    root: QueryRootSpec,
+    withExprs: Record<string, QueryTableExpression>,
+    selectExprs: Record<string, QuerySelectExpression | Record<string, never>>,
+    cursors: Record<string, string>,
+  ): Promise<void> {
     const {
+      key,
       viewExternalId,
       select = { _all: true },
       filters,
       sort = {},
       limit: requestedLimit = DEFAULT_LIMIT,
       cursor = null,
-    } = options;
+    } = root;
     const limit = requestedLimit === -1 ? MAX_LIMIT : requestedLimit;
 
     const rootView = await this.viewMapper.getView(viewExternalId);
-    await this.validator.validate(options, rootView);
+    await this.validator.validate(
+      {
+        viewExternalId,
+        select,
+        filters,
+        sort,
+        limit: requestedLimit,
+        cursor,
+      } as QueryOptions<Record<string, unknown>>,
+      rootView,
+    );
     const rootViewRef = toViewReference(rootView);
 
-    const whereFilters = filters
-      ? await this.filterMapper.map(filters as Record<string, unknown>, rootView)
-      : [];
+    const whereFilters = filters ? await this.filterMapper.map(filters, rootView) : [];
 
     const baseFilters: FilterDefinition[] = [{ hasData: [rootViewRef] }, ...whereFilters];
 
-    const withExprs: Record<string, QueryTableExpression> = {
-      [viewExternalId]: {
-        nodes: {
-          filter: { and: baseFilters } as TableExpressionFilter,
-        },
-        sort: this.sortMapper.map(sort, rootView),
-        limit,
+    withExprs[key] = {
+      nodes: {
+        filter: { and: baseFilters } as TableExpressionFilter,
       },
+      sort: this.sortMapper.map(sort, rootView),
+      limit,
     };
-    const selectExprs: Record<string, QuerySelectExpression | Record<string, never>> = {};
 
     const properties = await this.includeStatements(
-      viewExternalId,
+      key,
       rootView,
-      select,
+      select as QuerySelect<Record<string, unknown>>,
       withExprs,
       selectExprs,
     );
 
-    selectExprs[viewExternalId] = buildSelect(rootViewRef, properties);
+    selectExprs[key] = buildSelect(rootViewRef, properties);
 
-    const cursors: Record<string, string> = {};
-    if (cursor != null) cursors[viewExternalId] = cursor;
-
-    return { with: withExprs, select: selectExprs, cursors };
+    if (cursor != null) cursors[key] = cursor;
   }
 
   private async includeStatements<TModel>(

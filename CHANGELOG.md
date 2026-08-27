@@ -1,5 +1,11 @@
 # industrial-model
 
+## 0.15.0
+
+### Minor Changes
+
+- Cognite Instances parity: list direct-relation `groupBy`, multiple aggregates in one call, and multi-root `queryMany`.
+
 ## 0.14.0
 
 ### Minor Changes

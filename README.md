@@ -521,6 +521,45 @@ const { items } = await model.query<CogniteAsset>()({
 
 Expanded relations use internal pagination as well. When a nested relation query reaches the internal page size, the client follows dependency cursors for up to 3 additional rounds.
 
+## Multi-root query (`queryMany`)
+
+Use `queryMany` when you need **several independent roots** in one Cognite `instances.query` — for example the latest event per asset — without issuing N separate `query()` calls.
+
+Each root has its own `key` (used in Cognite `with` / response `items`), filters, sort, limit, select, and optional cursor. Results are keyed by that same `key`. At most **50** roots per call.
+
+```ts
+type BaseEvent = IndustrialModel<{
+  startTime: Date;
+  assets: NodeId[];
+}>;
+
+const assets = [
+  { space: "plant", externalId: "asset-1" },
+  { space: "plant", externalId: "asset-2" },
+];
+
+const { results } = await model.queryMany({
+  roots: assets.map((asset) => ({
+    key: `latest-${asset.externalId}`,
+    viewExternalId: "BaseEvent",
+    select: { startTime: true },
+    filters: {
+      assets: { containsAny: [asset] },
+      startTime: { lte: new Date() },
+    },
+    sort: { startTime: "descending" },
+    limit: 1,
+  })),
+});
+
+for (const asset of assets) {
+  const latest = results[`latest-${asset.externalId}`]?.items[0];
+  console.log(asset.externalId, latest);
+}
+```
+
+`query()` remains the single-root API and is unchanged. `queryMany` does **not** auto-paginate root pages (`limit: -1` means one page up to Cognite's max limit); use each result's `cursor` to continue a root if needed.
+
 ## Upsert
 
 Use `upsert()` to create or patch nodes with the same model shape you use for queries. Each item must include `space` and `externalId`; all other fields are optional and only the fields you pass are updated.
@@ -845,6 +884,32 @@ const { items } = await model.aggregate<PointCloudVolume>()({
 items[0]?.group?.object3D?.externalId;
 ```
 
+List **direct** relations (for example `assets: NodeId[]`) are also groupable. Cognite **explodes** the list so each referenced id becomes its own group row (with a single `NodeId` in `group`, not an array):
+
+```ts
+type BaseEvent = IndustrialModel<{
+  assets: NodeId[];
+  duration: number;
+}>;
+
+const { items } = await model.aggregate<BaseEvent>()({
+  viewExternalId: "BaseEvent",
+  groupBy: {
+    assets: true,
+  },
+  aggregates: [{ count: "externalId" }, { sum: "duration" }],
+});
+
+for (const row of items) {
+  console.log(row.group?.assets?.externalId, row.aggregates?.[0]?.value, row.aggregates?.[1]?.value);
+  // row.aggregate is the first op (same as aggregates[0]) for backward compatibility
+}
+```
+
+Other list properties (for example `tags: string[]`) remain rejected in `groupBy`.
+
+Use `aggregates` (plural) when you need multiple Cognite aggregate ops in one call. Prefer it over repeating `aggregate()` for each op. The legacy single `aggregate` option still works and also populates `item.aggregates` as a one-element array.
+
 Text search filters are also supported in aggregations:
 
 ```ts
@@ -1158,6 +1223,16 @@ type QueryResult<TItem> = {
 
 Each item includes instance metadata such as `space`, `externalId`, `version`, `createdTime`, `deletedTime`, and `lastUpdatedTime`, plus the selected fields.
 
+### `model.queryMany(options)`
+
+Runs multiple independent query roots in one Cognite `instances.query`. Prefer this over N× `query()` when roots share a view but need distinct filters / limits / sorts (e.g. latest node per asset).
+
+| Option | Description |
+| --- | --- |
+| `roots` | 1–50 root specs. Each needs a unique `key`, plus the same fields as `query()` (`viewExternalId`, `select`, `filters`, `sort`, `limit`, `cursor`). |
+
+Returns `{ results: Record<rootKey, { items; cursor }> }`. Does not auto-paginate root pages.
+
 ### `model.upsert<TModel>()(options)`
 
 `upsert()` uses the same model type as `query()` and accepts partial node patches. It returns the Cognite apply result items.
@@ -1215,11 +1290,12 @@ type DeleteResult = {
 | Option | Description |
 | --- | --- |
 | `viewExternalId` | View to aggregate. |
-| `groupBy` | Groupable properties set to `true`; max 5 fields. |
+| `groupBy` | Groupable properties set to `true`; max 5 fields. Includes scalars, single direct relations, and **list** direct relations (Cognite explodes list relations into one row per referenced id). |
 | `filters` | Same filter syntax as `query()`. |
-| `aggregate` | One of `avg`, `min`, `max`, `sum`, or `count`. |
+| `aggregate` | One of `avg`, `min`, `max`, `sum`, or `count`. Prefer `aggregates` for multiple ops. |
+| `aggregates` | One or more aggregate defs in request/result order. Mutually exclusive with `aggregate`. |
 
-Provide at least one of `groupBy` or `aggregate`. Omit `aggregate` to fetch distinct grouped values. The client requests up to 1000 aggregate rows.
+Provide at least one of `groupBy` or `aggregate` / `aggregates`. Omit aggregate ops to fetch distinct grouped values. The client requests up to 1000 aggregate rows. Each result item exposes `aggregate` (first value) and `aggregates` (all values when ops were requested).
 
 | Aggregate | Input | Use case |
 | --- | --- | --- |
@@ -1308,6 +1384,7 @@ Logical combinators `AND`, `OR`, and `NOT` are supported at any nesting level, i
 | `NodeId`, `DataModelId` | Instance and data model identifiers. |
 | `QuerySelect` | Type helper for reusable query selections. |
 | `QueryResult`, `QueryResultItem` | Query output types. |
+| `QueryManyOptions`, `QueryManyResult`, `QueryRootSpec` | Multi-root `queryMany` types. |
 | `AggregateResult`, `AggregateResultItem` | Aggregate output types. |
 | `UpsertOptions`, `UpsertNode`, `UpsertProperties` | Upsert input helper types. |
 | `UpsertResult`, `UpsertResultItem` | Upsert output types. |

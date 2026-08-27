@@ -300,8 +300,16 @@ describe("Cognite Core module", () => {
       }),
     );
     expect(items).toEqual([
-      { group: { name: "Root Asset" }, aggregate: { value: 3 } },
-      { group: { name: "Parent Asset" }, aggregate: { value: 1 } },
+      {
+        group: { name: "Root Asset" },
+        aggregate: { value: 3 },
+        aggregates: [{ value: 3 }],
+      },
+      {
+        group: { name: "Parent Asset" },
+        aggregate: { value: 1 },
+        aggregates: [{ value: 1 }],
+      },
     ]);
   });
 

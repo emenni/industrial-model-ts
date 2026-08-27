@@ -1,7 +1,7 @@
 import type {
   AggregateOptions,
   AggregateResult,
-  AggregateResultItem,
+  AggregateResultItemForOptions,
   IndustrialModel,
   NodeId,
   QueryOptions,
@@ -681,7 +681,7 @@ export type CogniteCoreAggregateExecutor<TView extends CogniteCoreViewExternalId
   options?: TOptions,
 ) => Promise<
   AggregateResult<
-    AggregateResultItem<CogniteCoreModel<TView>, TOptions["groupBy"], TOptions["aggregate"]>
+    AggregateResultItemForOptions<CogniteCoreModel<TView>, TOptions & { viewExternalId: TView }>
   >
 >;
 

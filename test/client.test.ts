@@ -50,6 +50,68 @@ describe("IndustrialModelClient", () => {
     });
   });
 
+  it("runs queryMany with multiple independent roots in one Cognite query", async () => {
+    const makeAsset = (externalId: string, name: string): NodeDefinition => ({
+      instanceType: "node",
+      space: "test-space",
+      externalId,
+      properties: {
+        cdf_cdm: {
+          "CogniteAsset/v1": { name },
+        },
+      },
+    });
+
+    const client = makeCogniteClientMock({
+      queryItems: {
+        "latest-a": [makeAsset("asset-a", "Pump A")],
+        "latest-b": [makeAsset("asset-b", "Pump B")],
+      },
+    });
+    const model = new IndustrialModelClient(client, COGNITE_CORE_DATA_MODEL);
+
+    const { results } = await model.queryMany({
+      roots: [
+        {
+          key: "latest-a",
+          viewExternalId: "CogniteAsset",
+          select: { name: true },
+          filters: { name: { eq: "Pump A" } },
+          sort: { name: "descending" },
+          limit: 1,
+        },
+        {
+          key: "latest-b",
+          viewExternalId: "CogniteAsset",
+          select: { name: true },
+          filters: { name: { eq: "Pump B" } },
+          limit: 1,
+        },
+      ],
+    });
+
+    expect(client.instances.query).toHaveBeenCalledOnce();
+    expect(client.instances.query).toHaveBeenCalledWith(
+      expect.objectContaining({
+        with: expect.objectContaining({
+          "latest-a": expect.objectContaining({ limit: 1 }),
+          "latest-b": expect.objectContaining({ limit: 1 }),
+        }),
+      }),
+    );
+
+    expect(results["latest-a"]?.items).toHaveLength(1);
+    expect(results["latest-a"]?.items[0]).toMatchObject({
+      externalId: "asset-a",
+      name: "Pump A",
+    });
+    expect(results["latest-a"]?.cursor).toBeNull();
+    expect(results["latest-b"]?.items[0]).toMatchObject({
+      externalId: "asset-b",
+      name: "Pump B",
+    });
+  });
+
   it("auto-paginates root queries with Cognite's max page size when limit is -1", async () => {
     const makeAssetPage = (start: number, count: number): NodeDefinition[] =>
       Array.from({ length: count }, (_, index) => {

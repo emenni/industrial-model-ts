@@ -30,12 +30,13 @@ export function appendNodesAndEdges(
 export function getQueryForDependenciesPagination(
   query: InstancesQueryRequest,
   queryResult: InstancesQueryResponse,
-  viewExternalId: string,
+  rootKeys: string | Iterable<string>,
 ): InstancesQueryRequest | null {
   const cursorKeys = new Set(Object.keys(queryResult.nextCursor));
   const { nodesParent, nodesChildren } = getParentAndChildrenNodes(cursorKeys);
 
-  const leafCursors = getLeafCursors(queryResult, viewExternalId, nodesParent, nodesChildren);
+  const roots = typeof rootKeys === "string" ? [rootKeys] : [...rootKeys];
+  const leafCursors = getLeafCursors(queryResult, roots, nodesParent, nodesChildren);
 
   if (Object.keys(leafCursors).length === 0) {
     return null;
@@ -81,16 +82,17 @@ function getParentAndChildrenNodes(keys: Set<string>): {
 
 function getLeafCursors(
   queryResult: InstancesQueryResponse,
-  viewExternalId: string,
+  rootKeys: string[],
   nodesParent: Map<string, Set<string>>,
   nodesChildren: Map<string, Set<string>>,
 ): Record<string, string> {
   const targetCursors: Record<string, string> = {};
   const targetCursorKeys = new Set<string>();
+  const roots = new Set(rootKeys);
 
   for (const [cursorKey, cursorValue] of Object.entries(queryResult.nextCursor)) {
     if (
-      cursorKey === viewExternalId ||
+      roots.has(cursorKey) ||
       !cursorValue ||
       (queryResult.items[cursorKey]?.length ?? 0) !== MAX_LIMIT
     ) {

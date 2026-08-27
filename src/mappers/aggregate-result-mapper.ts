@@ -1,5 +1,11 @@
-import type { InstancesAggregateResponse } from "../cognite";
-import type { AggregateGroupBy, AggregateOptions, AggregateResultItem, NodeId } from "../types";
+import type { InstancesAggregateResponse, InstancesAggregateValue } from "../cognite";
+import type {
+  AggregateDefinition,
+  AggregateGroupBy,
+  AggregateOptions,
+  AggregateResultItem,
+  NodeId,
+} from "../types";
 import { getSelectedGroupByKeys } from "../utils";
 
 function isNodeId(value: unknown): value is NodeId {
@@ -13,12 +19,34 @@ function isNodeId(value: unknown): value is NodeId {
   );
 }
 
+function resolveAggregateDefinitions<TModel>(
+  options: Pick<AggregateOptions<TModel>, "aggregate" | "aggregates">,
+): AggregateDefinition<TModel>[] {
+  if (options.aggregates !== undefined) {
+    return [...options.aggregates];
+  }
+  if (options.aggregate !== undefined) {
+    return [options.aggregate];
+  }
+  return [];
+}
+
+function mapAggregateValue(
+  aggregateValue: InstancesAggregateValue | undefined,
+): { property?: string; value: number } | undefined {
+  if (aggregateValue?.value === undefined) return undefined;
+  return aggregateValue.property != null
+    ? { property: aggregateValue.property, value: aggregateValue.value }
+    : { value: aggregateValue.value };
+}
+
 export class AggregateResultMapper {
   map<TModel, TGroupBy extends AggregateGroupBy<TModel> | undefined>(
     response: InstancesAggregateResponse,
-    options: Pick<AggregateOptions<TModel>, "groupBy" | "aggregate">,
+    options: Pick<AggregateOptions<TModel>, "groupBy" | "aggregate" | "aggregates">,
   ): AggregateResultItem<TModel, TGroupBy>[] {
     const groupByKeys = options.groupBy ? getSelectedGroupByKeys(options.groupBy) : [];
+    const requestedOps = resolveAggregateDefinitions(options);
 
     return response.items.map((item) => {
       let group: Record<string, unknown> | undefined;
@@ -36,18 +64,20 @@ export class AggregateResultMapper {
         }
       }
 
-      const aggregateValue = item.aggregates[0];
-      const aggregate =
-        aggregateValue?.value !== undefined
-          ? aggregateValue.property != null
-            ? { property: aggregateValue.property, value: aggregateValue.value }
-            : { value: aggregateValue.value }
+      const aggregates =
+        requestedOps.length > 0
+          ? item.aggregates
+              .map(mapAggregateValue)
+              .filter((value): value is NonNullable<typeof value> => value !== undefined)
           : undefined;
+
+      const aggregate = aggregates?.[0];
 
       return {
         ...(group !== undefined ? { group } : {}),
         ...(aggregate !== undefined ? { aggregate } : {}),
-      } as AggregateResultItem<TModel, TGroupBy>;
+        ...(aggregates !== undefined && aggregates.length > 0 ? { aggregates } : {}),
+      } as unknown as AggregateResultItem<TModel, TGroupBy>;
     });
   }
 }

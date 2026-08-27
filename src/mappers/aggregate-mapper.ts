@@ -24,7 +24,7 @@ export class AggregateMapper {
   }
 
   async map<TModel>(options: AggregateOptions<TModel>): Promise<InstancesAggregateRequest> {
-    const { viewExternalId, filters, groupBy, aggregate } = options;
+    const { viewExternalId, filters, groupBy } = options;
     const rootView = await this.viewMapper.getView(viewExternalId);
     await this.validator.validate(options, rootView);
 
@@ -38,15 +38,31 @@ export class AggregateMapper {
           ? filterParts[0]
           : ({ and: filterParts } satisfies FilterDefinition);
 
+    const aggregateDefs = resolveAggregateDefinitions(options);
+
     return {
       view: toViewReference(rootView),
       instanceType: "node",
       limit: AGGREGATE_LIMIT,
       ...(filter !== undefined ? { filter } : {}),
       ...(groupBy ? { groupBy: getSelectedGroupByKeys(groupBy) } : {}),
-      ...(aggregate ? { aggregates: [mapAggregateDefinition(aggregate)] } : {}),
+      ...(aggregateDefs.length > 0
+        ? { aggregates: aggregateDefs.map(mapAggregateDefinition) }
+        : {}),
     };
   }
+}
+
+function resolveAggregateDefinitions<TModel>(
+  options: Pick<AggregateOptions<TModel>, "aggregate" | "aggregates">,
+): AggregateDefinition<TModel>[] {
+  if (options.aggregates !== undefined) {
+    return [...options.aggregates];
+  }
+  if (options.aggregate !== undefined) {
+    return [options.aggregate];
+  }
+  return [];
 }
 
 function mapAggregateDefinition<TModel>(

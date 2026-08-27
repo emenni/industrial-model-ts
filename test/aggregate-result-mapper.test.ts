@@ -25,6 +25,7 @@ describe("AggregateResultMapper", () => {
     expect(items[0]).toEqual({
       group: { name: "Pump A" },
       aggregate: { value: 5 },
+      aggregates: [{ value: 5 }],
     });
   });
 
@@ -50,6 +51,38 @@ describe("AggregateResultMapper", () => {
     expect(items[0]).toEqual({
       group: { volumeType: "Cylinder" },
       aggregate: { property: "volume", value: 12.5 },
+      aggregates: [{ property: "volume", value: 12.5 }],
+    });
+  });
+
+  it("maps multiple aggregate values from Cognite response", () => {
+    const response: InstancesAggregateResponse = {
+      items: [
+        {
+          instanceType: "node",
+          group: {
+            assets: { space: "asset-space", externalId: "asset-1" },
+          },
+          aggregates: [
+            { aggregate: "count", property: "externalId", value: 3 },
+            { aggregate: "sum", property: "duration", value: 120 },
+          ],
+        },
+      ],
+    };
+
+    const items = mapper.map(response, {
+      groupBy: { assets: true },
+      aggregates: [{ count: "externalId" }, { sum: "duration" }],
+    } as never);
+
+    expect(items[0]).toEqual({
+      group: { assets: { space: "asset-space", externalId: "asset-1" } },
+      aggregate: { property: "externalId", value: 3 },
+      aggregates: [
+        { property: "externalId", value: 3 },
+        { property: "duration", value: 120 },
+      ],
     });
   });
 
@@ -76,6 +109,7 @@ describe("AggregateResultMapper", () => {
       externalId: "obj-1",
     });
     expect(items[0]?.aggregate).toEqual({ property: "volume", value: 100 });
+    expect(items[0]?.aggregates).toEqual([{ property: "volume", value: 100 }]);
   });
 
   it("omits group when all grouped values are undefined", () => {
@@ -97,7 +131,10 @@ describe("AggregateResultMapper", () => {
       aggregate: { count: {} },
     });
 
-    expect(items[0]).toEqual({ aggregate: { value: 1 } });
+    expect(items[0]).toEqual({
+      aggregate: { value: 1 },
+      aggregates: [{ value: 1 }],
+    });
     expect(items[0]).not.toHaveProperty("group");
   });
 
@@ -116,5 +153,6 @@ describe("AggregateResultMapper", () => {
     expect(items).toHaveLength(2);
     expect(items[0]?.group).toEqual({ sourceId: "a" });
     expect(items[0]).not.toHaveProperty("aggregate");
+    expect(items[0]).not.toHaveProperty("aggregates");
   });
 });

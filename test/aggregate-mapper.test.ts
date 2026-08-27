@@ -160,13 +160,57 @@ describe("AggregateMapper", () => {
     ).rejects.toThrow(/numeric view property/);
   });
 
-  it("rejects list properties in groupBy", async () => {
+  it("rejects non-groupable list properties in groupBy", async () => {
     await expect(
       mapper.map({
         viewExternalId: "CogniteAsset",
         groupBy: { tags: true },
       }),
     ).rejects.toThrow(/Invalid aggregate options/);
+  });
+
+  it("maps list direct-relation groupBy to Cognite property names", async () => {
+    const request = await mapper.map<{ assets: { space: string; externalId: string }[] }>({
+      viewExternalId: "CogniteTimeSeries",
+      groupBy: { assets: true },
+      aggregate: { count: "externalId" },
+    });
+
+    expect(request.groupBy).toEqual(["assets"]);
+    expect(request.aggregates).toEqual([{ count: { property: "externalId" } }]);
+  });
+
+  it("maps multiple aggregates in request order", async () => {
+    const request = await mapper.map<PointCloudVolume>({
+      viewExternalId: "CognitePointCloudVolume",
+      groupBy: { volumeType: true },
+      aggregates: [{ count: "externalId" }, { sum: "volume" }],
+    });
+
+    expect(request.groupBy).toEqual(["volumeType"]);
+    expect(request.aggregates).toEqual([
+      { count: { property: "externalId" } },
+      { sum: { property: "volume" } },
+    ]);
+  });
+
+  it("rejects providing both aggregate and aggregates", async () => {
+    await expect(
+      mapper.map({
+        viewExternalId: "CogniteAsset",
+        aggregate: { count: {} },
+        aggregates: [{ count: {} }],
+      }),
+    ).rejects.toThrow(/either aggregate or aggregates/);
+  });
+
+  it("rejects empty aggregates array", async () => {
+    await expect(
+      mapper.map({
+        viewExternalId: "CogniteAsset",
+        aggregates: [],
+      }),
+    ).rejects.toThrow(/at least one aggregate definition/);
   });
 
   it("rejects invalid search filters in aggregate requests", async () => {
@@ -200,6 +244,6 @@ describe("AggregateMapper", () => {
       mapper.map({
         viewExternalId: "CogniteAsset",
       }),
-    ).rejects.toThrow(/either groupBy or aggregate must be provided/);
+    ).rejects.toThrow(/either groupBy or aggregate\/aggregates must be provided/);
   });
 });

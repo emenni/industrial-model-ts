@@ -24,7 +24,7 @@ export function renderTypes(
     "import type {",
     "  AggregateOptions,",
     "  AggregateResult,",
-    "  AggregateResultItem,",
+    "  AggregateResultItemForOptions,",
     "  IndustrialModel,",
     "  NodeId,",
     "  QueryOptions,",
@@ -146,7 +146,10 @@ export type ${name}AggregateExecutor<TView extends ${name}ViewExternalId> = <
   options?: TOptions,
 ) => Promise<
   AggregateResult<
-    AggregateResultItem<${name}Model<TView>, TOptions["groupBy"], TOptions["aggregate"]>
+    AggregateResultItemForOptions<
+      ${name}Model<TView>,
+      TOptions & { viewExternalId: TView }
+    >
   >
 >;
 

@@ -47,9 +47,20 @@ export class AggregateValidator {
     errors.push(...this.validateOptionsShape(options, rootView));
 
     const selectedGroupBy = options.groupBy ? getSelectedGroupByKeys(options.groupBy) : [];
+    const hasAggregate =
+      options.aggregate !== undefined ||
+      (options.aggregates !== undefined && options.aggregates.length > 0);
 
-    if (selectedGroupBy.length === 0 && options.aggregate === undefined) {
-      errors.push("aggregate: either groupBy or aggregate must be provided");
+    if (options.aggregate !== undefined && options.aggregates !== undefined) {
+      errors.push("aggregate: provide either aggregate or aggregates, not both");
+    }
+
+    if (options.aggregates !== undefined && options.aggregates.length === 0) {
+      errors.push("aggregates: must contain at least one aggregate definition");
+    }
+
+    if (selectedGroupBy.length === 0 && !hasAggregate) {
+      errors.push("aggregate: either groupBy or aggregate/aggregates must be provided");
     }
 
     if (options.filters !== undefined) {
@@ -72,6 +83,19 @@ export class AggregateValidator {
       );
     }
 
+    if (options.aggregates !== undefined) {
+      for (let i = 0; i < options.aggregates.length; i++) {
+        const def = options.aggregates[i];
+        if (def === undefined) continue;
+        errors.push(
+          ...this.validateAggregate(def as AggregateDefinition<Record<string, unknown>>, rootView, [
+            "aggregates",
+            i,
+          ]),
+        );
+      }
+    }
+
     if (errors.length > 0) {
       throw new Error(
         `Invalid aggregate options:\n${errors.map((error) => `- ${error}`).join("\n")}`,
@@ -89,6 +113,7 @@ export class AggregateValidator {
         filters: z.unknown().optional(),
         groupBy: z.unknown().optional(),
         aggregate: z.unknown().optional(),
+        aggregates: z.unknown().optional(),
       })
       .strict();
 

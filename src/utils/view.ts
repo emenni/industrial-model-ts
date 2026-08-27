@@ -81,9 +81,12 @@ const NUMERIC_PROPERTY_TYPES = new Set(["int32", "int64", "float32", "float64"])
 
 export function isGroupableProperty(property: ViewDefinitionProperty): boolean {
   if (!isViewPropertyDefinition(property)) return false;
-  if (property.type.list === true) return false;
   const type = property.type.type;
-  return type != null && GROUPABLE_PROPERTY_TYPES.has(type);
+  if (type == null || !GROUPABLE_PROPERTY_TYPES.has(type)) return false;
+  // Cognite explodes list direct relations into one group row per referenced id.
+  // Other list properties (e.g. text[]) are not groupable.
+  if (property.type.list === true) return type === "direct";
+  return true;
 }
 
 export function isNumericProperty(property: ViewPropertyDefinition): boolean {

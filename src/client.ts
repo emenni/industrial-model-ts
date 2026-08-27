@@ -19,7 +19,7 @@ import type {
   AggregateExecutor,
   AggregateOptions,
   AggregateResult,
-  AggregateResultItem,
+  AggregateResultItemForOptions,
   DataModelId,
   DatapointsExecutor,
   DeleteResult,
@@ -27,6 +27,8 @@ import type {
   IndustrialModelClientOptions,
   NodeId,
   QueryExecutor,
+  QueryManyOptions,
+  QueryManyResult,
   QueryOptions,
   QueryResult,
   QueryResultItem,
@@ -86,12 +88,20 @@ export class IndustrialModelClient {
     return execute as unknown as QueryExecutor<TModel>;
   }
 
+  /**
+   * Run multiple independent query roots in one Cognite `instances.query`.
+   * Each root has its own key, filters, sort, limit, and select; results are keyed by `root.key`.
+   * Does not auto-paginate root pages (`limit: -1` means one page up to Cognite's max limit).
+   */
+  async queryMany(options: QueryManyOptions): Promise<QueryManyResult> {
+    return this.queryManyInternal(options);
+  }
+
   aggregate<TModel>(): AggregateExecutor<TModel> {
     const execute = <const TOptions extends AggregateOptions<TModel>>(
       options: TOptions,
-    ): Promise<
-      AggregateResult<AggregateResultItem<TModel, TOptions["groupBy"], TOptions["aggregate"]>>
-    > => this.aggregateInternal(options);
+    ): Promise<AggregateResult<AggregateResultItemForOptions<TModel, TOptions>>> =>
+      this.aggregateInternal(options);
 
     return execute as unknown as AggregateExecutor<TModel>;
   }
@@ -171,15 +181,13 @@ export class IndustrialModelClient {
 
   private async aggregateInternal<TModel, const TOptions extends AggregateOptions<TModel>>(
     options: TOptions,
-  ): Promise<
-    AggregateResult<AggregateResultItem<TModel, TOptions["groupBy"], TOptions["aggregate"]>>
-  > {
+  ): Promise<AggregateResult<AggregateResultItemForOptions<TModel, TOptions>>> {
     const cogniteRequest = await this.aggregateMapper.map(options);
     const response = await this.cognite.aggregateInstances(cogniteRequest);
     const items = this.aggregateResultMapper.map<TModel, TOptions["groupBy"]>(
       response,
       options,
-    ) as AggregateResultItem<TModel, TOptions["groupBy"], TOptions["aggregate"]>[];
+    ) as unknown as AggregateResultItemForOptions<TModel, TOptions>[];
     return { items };
   }
 
@@ -226,17 +234,60 @@ export class IndustrialModelClient {
     }
   }
 
+  private async queryManyInternal(options: QueryManyOptions): Promise<QueryManyResult> {
+    const cogniteQuery = await this.queryMapper.mapMany(options);
+    const rootKeys = options.roots.map((root) => root.key);
+    const queryResult = await this.cognite.queryInstances(cogniteQuery);
+
+    const dependenciesData = await this.queryDependenciesPages(cogniteQuery, queryResult, rootKeys);
+
+    const queryResultData = appendNodesAndEdges(
+      mapNodesAndEdges(queryResult, cogniteQuery),
+      dependenciesData,
+    );
+
+    // Ensure every root key exists so mapNodes can run even when Cognite omits empty roots.
+    for (const key of rootKeys) {
+      if (!(key in queryResultData)) {
+        queryResultData[key] = [];
+      }
+    }
+
+    const results: QueryManyResult["results"] = {};
+
+    for (const root of options.roots) {
+      const effectiveLimit = root.limit === -1 ? MAX_LIMIT : (root.limit ?? DEFAULT_LIMIT);
+      const mappedPageResult = await this.resultMapper.mapNodes(
+        root.key,
+        queryResultData,
+        root.viewExternalId,
+      );
+      const pageResult = this.validateResults
+        ? await this.resultValidator.parseItems(root.viewExternalId, mappedPageResult, root.select)
+        : mappedPageResult;
+      const nextCursor = queryResult.nextCursor[root.key] ?? null;
+      const isLastPage = pageResult.length < effectiveLimit || !nextCursor;
+
+      results[root.key] = {
+        items: pageResult,
+        cursor: isLastPage ? null : nextCursor,
+      };
+    }
+
+    return { results };
+  }
+
   private async queryDependenciesPages(
     cogniteQuery: InstancesQueryRequest,
     queryResult: InstancesQueryResponse,
-    viewExternalId: string,
+    rootKeys: string | Iterable<string>,
     remainingDepth = MAX_DEPENDENCY_DEPTH,
   ): Promise<QueryResultMap | null> {
     if (remainingDepth <= 0) {
       return null;
     }
 
-    const newQuery = getQueryForDependenciesPagination(cogniteQuery, queryResult, viewExternalId);
+    const newQuery = getQueryForDependenciesPagination(cogniteQuery, queryResult, rootKeys);
 
     if (!newQuery) return null;
 
@@ -246,7 +297,7 @@ export class IndustrialModelClient {
     const nestedResults = await this.queryDependenciesPages(
       newQuery,
       newQueryResult,
-      viewExternalId,
+      rootKeys,
       remainingDepth - 1,
     );
 

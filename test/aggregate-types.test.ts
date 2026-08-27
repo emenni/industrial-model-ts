@@ -1,5 +1,6 @@
 import { describe, expectTypeOf, it } from "vitest";
-import { type IndustrialModel, IndustrialModelClient } from "../src/index.js";
+import { type IndustrialModel, IndustrialModelClient, type NodeId } from "../src/index.js";
+import type { AggregateOptions, AggregateResultItemForOptions } from "../src/types.js";
 import {
   COGNITE_CORE_DATA_MODEL,
   makeCogniteClientMock,
@@ -10,6 +11,12 @@ type PointCloudVolume = IndustrialModel<{
   name: string;
   volume: number;
   volumeType: string;
+}>;
+
+type BaseEvent = IndustrialModel<{
+  assets: NodeId[];
+  duration: number;
+  externalId: string;
 }>;
 
 describe("aggregate typing", () => {
@@ -30,6 +37,9 @@ describe("aggregate typing", () => {
     expectTypeOf<Item["group"]>().toEqualTypeOf<{ volumeType: string } | undefined>();
     expectTypeOf<NonNullable<Item["aggregate"]>["property"]>().toEqualTypeOf<"volume">();
     expectTypeOf<NonNullable<Item["aggregate"]>["value"]>().toEqualTypeOf<number>();
+    expectTypeOf<NonNullable<Item["aggregates"]>>().toEqualTypeOf<
+      readonly [{ property: "volume"; value: number }]
+    >();
 
     const first = items[0];
     if (first?.group) {
@@ -56,5 +66,32 @@ describe("aggregate typing", () => {
     type HasProperty = "property" extends keyof Aggregate ? true : false;
 
     expectTypeOf<HasProperty>().toEqualTypeOf<false>();
+  });
+
+  it("allows list direct-relation groupBy and multi-aggregate in types", () => {
+    const options = {
+      viewExternalId: "BaseEvent",
+      groupBy: { assets: true },
+      aggregates: [{ count: "externalId" }, { sum: "duration" }],
+    } as const satisfies AggregateOptions<BaseEvent>;
+
+    type Item = AggregateResultItemForOptions<BaseEvent, typeof options>;
+
+    expectTypeOf<NonNullable<Item["group"]>["assets"]>().toEqualTypeOf<NodeId>();
+    expectTypeOf<NonNullable<Item["aggregate"]>>().toEqualTypeOf<{
+      property: "externalId";
+      value: number;
+    }>();
+    expectTypeOf<NonNullable<Item["aggregates"]>[0]>().toEqualTypeOf<{
+      property: "externalId";
+      value: number;
+    }>();
+    expectTypeOf<NonNullable<Item["aggregates"]>[1]>().toEqualTypeOf<{
+      property: "duration";
+      value: number;
+    }>();
+
+    // Prove groupBy accepts NodeId[] fields at the options layer
+    expectTypeOf(options.groupBy).toEqualTypeOf<{ readonly assets: true }>();
   });
 });
