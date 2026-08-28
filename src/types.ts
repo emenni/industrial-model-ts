@@ -112,27 +112,6 @@ export type QueryOptions<
   cursor?: string | null;
 };
 
-/** One independent root in a multi-root Cognite `instances.query`. */
-export type QueryRootSpec = {
-  /** Unique key in the Cognite `with` / response `items` map. */
-  key: string;
-  viewExternalId: string;
-  select?: Record<string, unknown>;
-  filters?: Record<string, unknown>;
-  sort?: Record<string, SortDirection>;
-  limit?: number;
-  cursor?: string | null;
-};
-
-export type QueryManyOptions = {
-  roots: readonly QueryRootSpec[];
-};
-
-export type QueryManyResult = {
-  /** Per-root items and cursor, keyed by `root.key`. */
-  results: Record<string, QueryResult>;
-};
-
 export type QueryResultMetadata = Pick<
   NodeDefinition,
   "space" | "externalId" | "version" | "createdTime" | "deletedTime" | "lastUpdatedTime"

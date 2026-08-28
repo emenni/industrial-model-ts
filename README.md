@@ -521,45 +521,6 @@ const { items } = await model.query<CogniteAsset>()({
 
 Expanded relations use internal pagination as well. When a nested relation query reaches the internal page size, the client follows dependency cursors for up to 3 additional rounds.
 
-## Multi-root query (`queryMany`)
-
-Use `queryMany` when you need **several independent roots** in one Cognite `instances.query` — for example the latest event per asset — without issuing N separate `query()` calls.
-
-Each root has its own `key` (used in Cognite `with` / response `items`), filters, sort, limit, select, and optional cursor. Results are keyed by that same `key`. At most **50** roots per call.
-
-```ts
-type BaseEvent = IndustrialModel<{
-  startTime: Date;
-  assets: NodeId[];
-}>;
-
-const assets = [
-  { space: "plant", externalId: "asset-1" },
-  { space: "plant", externalId: "asset-2" },
-];
-
-const { results } = await model.queryMany({
-  roots: assets.map((asset) => ({
-    key: `latest-${asset.externalId}`,
-    viewExternalId: "BaseEvent",
-    select: { startTime: true },
-    filters: {
-      assets: { containsAny: [asset] },
-      startTime: { lte: new Date() },
-    },
-    sort: { startTime: "descending" },
-    limit: 1,
-  })),
-});
-
-for (const asset of assets) {
-  const latest = results[`latest-${asset.externalId}`]?.items[0];
-  console.log(asset.externalId, latest);
-}
-```
-
-`query()` remains the single-root API and is unchanged. `queryMany` does **not** auto-paginate root pages (`limit: -1` means one page up to Cognite's max limit); use each result's `cursor` to continue a root if needed.
-
 ## Upsert
 
 Use `upsert()` to create or patch nodes with the same model shape you use for queries. Each item must include `space` and `externalId`; all other fields are optional and only the fields you pass are updated.
@@ -1223,16 +1184,6 @@ type QueryResult<TItem> = {
 
 Each item includes instance metadata such as `space`, `externalId`, `version`, `createdTime`, `deletedTime`, and `lastUpdatedTime`, plus the selected fields.
 
-### `model.queryMany(options)`
-
-Runs multiple independent query roots in one Cognite `instances.query`. Prefer this over N× `query()` when roots share a view but need distinct filters / limits / sorts (e.g. latest node per asset).
-
-| Option | Description |
-| --- | --- |
-| `roots` | 1–50 root specs. Each needs a unique `key`, plus the same fields as `query()` (`viewExternalId`, `select`, `filters`, `sort`, `limit`, `cursor`). |
-
-Returns `{ results: Record<rootKey, { items; cursor }> }`. Does not auto-paginate root pages.
-
 ### `model.upsert<TModel>()(options)`
 
 `upsert()` uses the same model type as `query()` and accepts partial node patches. It returns the Cognite apply result items.
@@ -1384,7 +1335,6 @@ Logical combinators `AND`, `OR`, and `NOT` are supported at any nesting level, i
 | `NodeId`, `DataModelId` | Instance and data model identifiers. |
 | `QuerySelect` | Type helper for reusable query selections. |
 | `QueryResult`, `QueryResultItem` | Query output types. |
-| `QueryManyOptions`, `QueryManyResult`, `QueryRootSpec` | Multi-root `queryMany` types. |
 | `AggregateResult`, `AggregateResultItem` | Aggregate output types. |
 | `UpsertOptions`, `UpsertNode`, `UpsertProperties` | Upsert input helper types. |
 | `UpsertResult`, `UpsertResultItem` | Upsert output types. |

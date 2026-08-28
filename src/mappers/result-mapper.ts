@@ -79,13 +79,12 @@ export class QueryResultMapper {
   async mapNodes(
     rootNode: string,
     queryResult: QueryResultMap,
-    viewExternalId: string = rootNode,
   ): Promise<Record<string, unknown>[]> {
     if (!(rootNode in queryResult)) {
       throw new Error(`"${rootNode}" is not available in the query result`);
     }
 
-    const rootView = await this.viewMapper.getView(viewExternalId);
+    const rootView = await this.viewMapper.getView(rootNode);
     const values = await this.mapNodeProperty(rootNode, rootView, queryResult);
     if (!values) return [];
 
